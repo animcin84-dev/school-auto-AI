@@ -9,6 +9,8 @@
   policies    — регистрация/проверка/поиск политик
   decide      — предложение действия (этап 1: всегда NO_CHANGE с причинами)
   forecast    — хронологический backtest базовых прогнозов (этап 3; DATA_NOT_READY при нехватке данных)
+  optimize    — симуляционное предложение изменения объёма (этап 4; REAL => NO_CHANGE)
+  compare     — сравнение стратегий управления объёмом (SIMULATED)
   selfcheck   — проверка инвариантов хранилища
   audit       — хвост журнала аудита
   demo        — изолированное синтетическое демо (DEMO-среда)
@@ -28,6 +30,7 @@ from . import enums, metrics
 from .csvio import parse_file
 from .decide import propose_action
 from .errors import SraError
+from .store import proposal_hash
 from .policies import PolicyRegistry
 from .store import EvidenceStore
 from .validation import (validate_observations, validate_sessions)
@@ -228,6 +231,61 @@ def cmd_forecast(args) -> int:
         store.close()
 
 
+def _load_decision_policy(store, policy_id: str) -> tuple[dict, list[str]]:
+    """Возвращает (values, problems) параметров политики решения."""
+    from sra.optimizer.policies import validate_decision_policy
+    reg = PolicyRegistry(store)
+    try:
+        row = reg.get(policy_id)
+    except SraError as e:
+        raise SystemExit(f"policy error: {e.to_dict()}")
+    values = row["payload_json"].get("values", {})
+    problems = validate_decision_policy(values)
+    return values, problems
+
+
+def cmd_optimize(args) -> int:
+    from sra.optimizer.propose import propose_adjustment
+    store = EvidenceStore(args.db, args.environment)
+    try:
+        policies = PolicyRegistry(store)
+        proposal = propose_adjustment(
+            store, policies, school_id=args.school_id, meal_type=args.meal_type,
+            target_date=args.target_date, policy_id=args.policy_id,
+            actor=args.actor, decision_hour=args.decision_hour).to_dict()
+        proposal["payload_hash"] = proposal_hash(proposal)
+        _print(proposal)
+        return 0
+    finally:
+        store.close()
+
+
+def cmd_compare(args) -> int:
+    from sra.optimizer.compare import compare_strategies
+    store = EvidenceStore(args.db, args.environment)
+    try:
+        values, problems = _load_decision_policy(store, args.policy_id)
+        if problems:
+            _print({"status": "POLICY_INVALID", "problems": problems})
+            return 2
+        report = compare_strategies(
+            store, school_id=args.school_id, meal_type=args.meal_type,
+            test_days=args.test_days, calib_days=int(values["calib_days"]),
+            baseline_days=int(values["baseline_days"]), decision_hour=args.decision_hour,
+            model_name=values["forecast_model"],
+            seasonal_weeks=int(values.get("seasonal_weeks", 3)),
+            cost_waste_per_kg=values["cost_waste_per_kg"],
+            cost_shortage_per_kg=values["cost_shortage_per_kg"],
+            shortage_risk_max=values["shortage_risk_max"],
+            delta_max_pct=values["delta_max_pct_of_baseline"],
+            grid_step_g=values["grid_step_g"])
+        report["policy"] = f"{args.policy_id} (SIMULATED-параметры)"
+        _print(report)
+        return 0
+    finally:
+        store.close()
+
+
 def cmd_selfcheck(args) -> int:
     store = EvidenceStore(args.db, args.environment)
     try:
@@ -261,6 +319,9 @@ def cmd_demo(args) -> int:
         "decision": report["decision"],
         "forecast_status": report["forecast"]["status"],
         "forecast_models": [m["name"] for m in report["forecast"].get("models", [])],
+        "optimizer_decision": {k: report["optimizer_decision"][k]
+                               for k in ("action", "action_status", "mode", "reasons")
+                               if k in report["optimizer_decision"]},
         "selfcheck_ok": all(r["ok"] for r in report["selfcheck"]),
         "report_file": str(Path(args.dir) / "demo_report.json"),
     })
@@ -367,6 +428,25 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--no-save-cards", action="store_true")
     sp.add_argument("--actor", default="forecaster")
     sp.set_defaults(func=cmd_forecast)
+
+    sp = sub.add_parser("optimize", help="симуляционное предложение объёма (этап 4)")
+    db_args(sp)
+    sp.add_argument("--school-id", required=True)
+    sp.add_argument("--meal-type", default="LUNCH")
+    sp.add_argument("--target-date", required=True)
+    sp.add_argument("--policy-id", required=True, help="policy_id параметров решения")
+    sp.add_argument("--decision-hour", type=int, default=18)
+    sp.add_argument("--actor", default="planner")
+    sp.set_defaults(func=cmd_optimize)
+
+    sp = sub.add_parser("compare", help="сравнение стратегий объёма (SIMULATED)")
+    db_args(sp)
+    sp.add_argument("--school-id", required=True)
+    sp.add_argument("--meal-type", default="LUNCH")
+    sp.add_argument("--policy-id", required=True)
+    sp.add_argument("--test-days", type=int, default=10)
+    sp.add_argument("--decision-hour", type=int, default=18)
+    sp.set_defaults(func=cmd_compare)
 
     sp = sub.add_parser("selfcheck", help="проверка инвариантов хранилища")
     db_args(sp)

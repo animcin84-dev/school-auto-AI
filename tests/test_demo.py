@@ -55,6 +55,31 @@ class TestDemoPipeline(unittest.TestCase):
         self.assertEqual(names, {"naive", "seasonal_naive", "moving_average"})
         self.assertTrue(f["model_cards"], "карты моделей должны быть сохранены в демо-БД")
 
+    def test_optimizer_decision(self):
+        od = self.report["optimizer_decision"]
+        # Направление зависит от окна данных (при 30 днях смена режима не видна и
+        # оптимизатор предлагает УВЕЛИЧЕНИЕ; при 60 — сокращение), поэтому проверяем
+        # контракт и границы, а не направление.
+        self.assertEqual(od["action"], "ADJUST_PREPARED_VOLUME")
+        self.assertEqual(od["action_status"], "SIMULATED_NOT_EXECUTABLE")
+        self.assertEqual(od["mode"], enums.MODE_DEMO)
+        ap = od["action_params"]
+        self.assertGreater(abs(ap["delta_g"]), 1e-9)
+        self.assertLessEqual(abs(ap["delta_g"]), ap["delta_max_g"] + 1e-9)
+        for key in ("shortage_risk_max", "delta_bound_g", "nonnegative_mass_g",
+                    "time_budget_s"):
+            self.assertTrue(od["constraint_checks"][key]["pass"], msg=key)
+        self.assertEqual(od["expected_effect_interval"]["nature"], enums.SIMULATED)
+        self.assertTrue(any("порци" in n for n in od["notes"]),
+                        "должна быть оговорка о неприкосновенности порции")
+
+    def test_strategy_comparison_in_demo(self):
+        sc = self.report["strategy_comparison"]
+        self.assertEqual(sc["status"], "OK")
+        self.assertEqual(sc["artifact_nature"], enums.SIMULATED)
+        for name in ("no_change", "fixed_quantile_rule", "optimizer"):
+            self.assertGreater(sc["strategies"][name]["n_days"], 0, msg=name)
+
     def test_model_cards_in_demo_db(self):
         store = EvidenceStore(self.tmp / "demo" / "demo.sqlite3", enums.ENV_DEMO,
                               clock=CLOCK)

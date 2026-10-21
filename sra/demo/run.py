@@ -30,6 +30,28 @@ DEMO_COST_POLICY = {
     "payload": {"cost_per_kg": 500.0, "currency": "KZT_DEMO"},
 }
 
+# Синтетическая политика РЕШЕНИЯ (этап 4): все параметры искусственные,
+# политика UNVERIFIED; предложение оптимизатора в DEMO — SIMULATED и не даёт
+# права на реальное вмешательство.
+DEMO_OPT_POLICY = {
+    "policy_id": "POLICY-DEMO-OPT-001",
+    "version": 1,
+    "jurisdiction": "DEMO",
+    "payload": {
+        "cost_waste_per_kg": 500.0,          # KZT_DEMO за кг предотвратимых потерь
+        "cost_shortage_per_kg": 5000.0,      # доминирование: нехватка дороже потерь
+        "currency": "KZT_DEMO",
+        "shortage_risk_max": 0.10,           # жёсткая граница риска нехватки
+        "delta_max_pct_of_baseline": 0.15,   # максимум ±15% от привычного объёма
+        "baseline_days": 8,
+        "forecast_model": "seasonal_naive",
+        "seasonal_weeks": 3,
+        "calib_days": 8,
+        "grid_step_g": 250.0,
+        "min_improvement_rel": 0.02,
+    },
+}
+
 
 def run_demo(out_dir: str | Path = "data/demo", *, seed: int = 42, n_days: int = 60,
              reset: bool = False) -> dict:
@@ -100,6 +122,37 @@ def run_demo(out_dir: str | Path = "data/demo", *, seed: int = 42, n_days: int =
                 actor="demo", environment=enums.ENV_DEMO))
     forecast_report["model_cards"] = forecast_cards
 
+    # 7b. Симуляционное предложение оптимизатора (этап 4) на следующий учебный день.
+    from datetime import date as _date, timedelta as _timedelta
+    from ..optimizer.propose import propose_adjustment
+    from ..optimizer.compare import compare_strategies
+    policies.register(
+        policy_id=DEMO_OPT_POLICY["policy_id"], version=DEMO_OPT_POLICY["version"],
+        jurisdiction=DEMO_OPT_POLICY["jurisdiction"], source_ref=manifest["source_ref"],
+        valid_from="2000-01-01", valid_until="2099-12-31",
+        payload=DEMO_OPT_POLICY["payload"], actor="demo", data_nature=enums.SYNTHETIC)
+    last_day = _date.fromisoformat(sessions[-1].service_date.isoformat())
+    next_school_day = last_day + _timedelta(days=1)
+    while next_school_day.weekday() >= 5:
+        next_school_day += _timedelta(days=1)
+    optimizer_decision = propose_adjustment(
+        store, policies, school_id=manifest["school_id"], meal_type="LUNCH",
+        target_date=next_school_day.isoformat(),
+        policy_id=DEMO_OPT_POLICY["policy_id"], actor="demo").to_dict()
+    opt_values = DEMO_OPT_POLICY["payload"]
+    strategy_comparison = compare_strategies(
+        store, school_id=manifest["school_id"], meal_type="LUNCH",
+        test_days=min(8, max(3, manifest["n_sessions"] // 8)),
+        calib_days=int(opt_values["calib_days"]),
+        baseline_days=int(opt_values["baseline_days"]),
+        model_name=opt_values["forecast_model"],
+        seasonal_weeks=int(opt_values["seasonal_weeks"]),
+        cost_waste_per_kg=opt_values["cost_waste_per_kg"],
+        cost_shortage_per_kg=opt_values["cost_shortage_per_kg"],
+        shortage_risk_max=opt_values["shortage_risk_max"],
+        delta_max_pct=opt_values["delta_max_pct_of_baseline"],
+        grid_step_g=opt_values["grid_step_g"])
+
     # 8. Самопроверка инвариантов хранилища.
     selfcheck = store.selfcheck()
 
@@ -119,6 +172,8 @@ def run_demo(out_dir: str | Path = "data/demo", *, seed: int = 42, n_days: int =
         "metric_report": metric_report,
         "decision": proposal,
         "forecast": forecast_report,
+        "optimizer_decision": optimizer_decision,
+        "strategy_comparison": strategy_comparison,
         "selfcheck": selfcheck,
     }
     (out / "demo_report.json").write_text(

@@ -20,6 +20,7 @@
 - [docs/DATA_CONTRACT.md](docs/DATA_CONTRACT.md) — будущие входные данные, единицы, происхождение и валидация.
 - [docs/PHASE1.md](docs/PHASE1.md) — отчёт по реализованному этапу 1–2: каркас, валидация, хранилище, метрики, демо, тесты.
 - [docs/PHASE3.md](docs/PHASE3.md) — отчёт по этапу 3: базовые прогнозы, хронологический backtest, интервалы, дрейф.
+- [docs/PHASE4.md](docs/PHASE4.md) — отчёт по этапу 4: симуляционный оптимизатор, жёсткие ограничения, согласования версий, сравнение стратегий.
 - [AGENTS.md](AGENTS.md) — обязательные правила для ИИ, работающего в этом репозитории.
 - [templates/sessions.csv](templates/sessions.csv) и [templates/observations.csv](templates/observations.csv) — пустые шаблоны, не результаты школы.
 
@@ -34,12 +35,16 @@ python3 -m unittest discover -s tests          # 121 тест
 python3 -m sra demo --dir data/demo --seed 42  # изолированное синтетическое демо + backtest прогнозов
 python3 -m sra forecast --db data/demo/demo.sqlite3 --environment demo \
   --school-id SCH-DEMO-001                     # backtest базовых прогнозов (этап 3)
-python3 -m sra --help                          # все команды (init-db, import, metrics,
-                                               # verify, revise, policies, decide, forecast,
-                                               # selfcheck, audit)
+python3 -m sra optimize --db data/demo/demo.sqlite3 --environment demo \
+  --school-id SCH-DEMO-001 --target-date 2026-11-24 \
+  --policy-id POLICY-DEMO-OPT-001              # симуляционное предложение объёма (этап 4)
+python3 -m sra --help                          # все команды (init-db, import, metrics, verify,
+                                               # revise, policies, decide, forecast, optimize,
+                                               # compare, selfcheck, audit)
 ```
 
-Статус: каркас, демо и базовые прогнозы проверены автотестами (121); реальных
+Статус: каркас, демо, прогнозы и симуляционный оптимизатор проверены автотестами
+(157); реальных
 данных, обученных моделей, нормативов и одобрений в проекте НЕТ; при нехватке
 данных прогноз возвращает DATA_NOT_READY; реальное вмешательство заблокировано
 по построению (решение по умолчанию NO_CHANGE). Подробности — в

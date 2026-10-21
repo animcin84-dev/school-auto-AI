@@ -20,6 +20,7 @@ SQLite — выбор этапа 1 (stdlib, ноль зависимостей, �
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 from datetime import datetime, timezone
@@ -142,6 +143,33 @@ CREATE TABLE model_cards (
     UNIQUE (model_id, version)
 );
 """),
+    # Миграция 3 (этап 4): согласования предложений конкретной версии и записи
+    # об исполнении. Согласование привязано к хэшу содержимого предложения;
+    # изменение предложения делает согласование неприменимым; повторное
+    # исполнение одной версии блокируется уникальным индексом.
+    (3, """
+CREATE TABLE proposal_approvals (
+    approval_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    proposal_id TEXT NOT NULL,
+    proposal_hash TEXT NOT NULL,
+    approver TEXT NOT NULL,
+    role TEXT,
+    environment TEXT NOT NULL,
+    decided_at TEXT NOT NULL,
+    notes TEXT,
+    UNIQUE (proposal_id, proposal_hash, approver)
+);
+CREATE TABLE action_executions (
+    execution_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    proposal_id TEXT NOT NULL,
+    proposal_hash TEXT NOT NULL,
+    approval_id INTEGER NOT NULL REFERENCES proposal_approvals(approval_id),
+    environment TEXT NOT NULL,
+    executed_at TEXT NOT NULL,
+    executed_by TEXT NOT NULL,
+    UNIQUE (proposal_id, proposal_hash)
+);
+"""),
 ]
 
 _ENTITY_TABLE = {"session": "sessions_current", "observation": "observations_current"}
@@ -149,6 +177,14 @@ _ENTITY_TABLE = {"session": "sessions_current", "observation": "observations_cur
 
 def _utcnow() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def proposal_hash(proposal: dict) -> str:
+    """Канонический хэш содержимого предложения: согласование и исполнение
+    привязаны к конкретной версии; изменение любой детали меняет хэш."""
+    canonical = json.dumps(proposal, sort_keys=True, ensure_ascii=False,
+                           separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 class EvidenceStore:
@@ -666,6 +702,96 @@ class EvidenceStore:
                         details={"verifier": verifier, "method": method, "source_ref": source_ref})
         return {"entity_id": entity_id, "revision_id": current["revision_id"],
                 "evidence_status": enums.VERIFIED}
+
+    # --- Согласования и исполнение (этап 4; контур) ---------------------------------
+    def approve_proposal(self, proposal: dict, *, approver: str, role: str | None = None,
+                         notes: str | None = None, actor: str | None = None) -> dict:
+        """Согласует КОНКРЕТНУЮ версию предложения (по хэшу содержимого).
+
+        Ограждения:
+          - в REAL-среде согласований ещё нет: контур одобрения — этап 5,
+            реальных предложений в этапе 4 не существует;
+          - NO_CHANGE согласовать нечего;
+          - повторное согласование той же версии тем же согласующим отклоняется.
+        """
+        pid = proposal.get("proposal_id")
+        if not pid:
+            raise ValidationError("в предложении нет proposal_id", code="E_BAD_PROPOSAL")
+        if proposal.get("environment") != self.environment:
+            raise GuardError(
+                f"предложение из среды {proposal.get('environment')!r} не может быть "
+                f"согласовано в среде {self.environment!r}", code="E_ENV_MISMATCH")
+        if proposal.get("action") == "NO_CHANGE":
+            raise GuardError("NO_CHANGE согласовать нечего: действие не предлагается",
+                             code="E_NOTHING_TO_APPROVE")
+        if self.environment == enums.ENV_REAL:
+            raise GuardError(
+                "в REAL-среде контур согласования не введён (этап 5); в этапе 4 "
+                "реальные предложения не формируются", code="E_APPROVALS_NOT_AVAILABLE_STAGE4")
+        h = proposal_hash(proposal)
+        now = self._clock()
+        try:
+            with self._conn:
+                self._conn.execute(
+                    "INSERT INTO proposal_approvals(proposal_id, proposal_hash, approver, role, "
+                    "environment, decided_at, notes) VALUES (?,?,?,?,?,?,?)",
+                    (pid, h, approver, role, self.environment, now, notes))
+        except sqlite3.IntegrityError as e:
+            raise GuardError(
+                f"предложение {pid} версии {h[:12]} уже согласовано этим согласующим",
+                code="E_ALREADY_APPROVED") from e
+        self._audit(actor or approver, "APPROVAL_RECORDED_DEMO", entity_type="proposal",
+                    entity_id=pid, details={"proposal_hash": h, "approver": approver,
+                                            "role": role,
+                                            "note": "ДЕМО: согласование синтетическое"})
+        return {"approval_id": self._conn.execute(
+                    "SELECT approval_id FROM proposal_approvals WHERE proposal_id=? AND "
+                    "proposal_hash=? AND approver=?", (pid, h, approver)).fetchone()["approval_id"],
+                "proposal_id": pid, "proposal_hash": h, "approver": approver}
+
+    def record_action_execution(self, proposal: dict, *, approval_id: int,
+                                executed_by: str) -> dict:
+        """Фиксирует исполнение согласованной версии. Повторное исполнение той же
+        версии блокируется. В REAL-среде исполнение заблокировано до этапа 6."""
+        pid = proposal.get("proposal_id")
+        h = proposal_hash(proposal)
+        if self.environment == enums.ENV_REAL:
+            raise GuardError(
+                "исполнение действий в REAL-среде заблокировано: реальное вмешательство "
+                "требует условий этапа 6 (согласие школы, проверенные политики, план)",
+                code="E_EXECUTION_BLOCKED_STAGE4")
+        row = self._conn.execute(
+            "SELECT * FROM proposal_approvals WHERE approval_id = ?", (approval_id,)).fetchone()
+        if row is None or row["proposal_id"] != pid or row["proposal_hash"] != h:
+            raise GuardError(
+                f"указанное согласование не соответствует версии предложения {pid}/{h[:12]}",
+                code="E_APPROVAL_MISMATCH")
+        try:
+            with self._conn:
+                self._conn.execute(
+                    "INSERT INTO action_executions(proposal_id, proposal_hash, approval_id, "
+                    "environment, executed_at, executed_by) VALUES (?,?,?,?,?,?)",
+                    (pid, h, approval_id, self.environment, self._clock(), executed_by))
+        except sqlite3.IntegrityError as e:
+            raise GuardError(
+                f"предложение {pid} версии {h[:12]} уже исполнено; повторное исполнение "
+                "запрещено", code="E_DOUBLE_EXECUTION") from e
+        self._audit(executed_by, "EXECUTION_RECORDED_DEMO", entity_type="proposal",
+                    entity_id=pid, details={"proposal_hash": h, "approval_id": approval_id,
+                                            "note": "ДЕМО: запись о исполнении симуляционная"})
+        return {"execution_id": self._conn.execute(
+            "SELECT execution_id FROM action_executions WHERE proposal_id=? AND proposal_hash=?",
+            (pid, h)).fetchone()["execution_id"], "proposal_id": pid}
+
+    def list_approvals(self, proposal_id: str | None = None) -> list[dict]:
+        q = ("SELECT approval_id, proposal_id, proposal_hash, approver, role, environment, "
+             "decided_at, notes FROM proposal_approvals")
+        args: list = []
+        if proposal_id is not None:
+            q += " WHERE proposal_id = ?"
+            args.append(proposal_id)
+        q += " ORDER BY approval_id"
+        return [dict(r) for r in self._conn.execute(q, args)]
 
     # --- Аудит и самопроверка ------------------------------------------------------
     def audit_tail(self, n: int = 50) -> list[dict]:

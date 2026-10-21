@@ -96,6 +96,21 @@ class PolicyRegistry:
             raise NotFoundError(f"политика {policy_id} v{version} не найдена")
         return dict(row)
 
+    def get(self, policy_id: str, version: int | None = None) -> dict:
+        """Возвращает политику; без версии — последнюю. payload содержит разобранный JSON."""
+        if version is not None:
+            row = self._get(policy_id, version)
+        else:
+            row_ = self.store._conn.execute(
+                "SELECT * FROM policies WHERE policy_id = ? ORDER BY version DESC LIMIT 1",
+                (policy_id,)).fetchone()
+            if row_ is None:
+                raise NotFoundError(f"политика {policy_id} не найдена")
+            row = dict(row_)
+        row = dict(row)
+        row["payload_json"] = json.loads(row["payload"])
+        return row
+
     def find_applicable(self, *, jurisdiction: str, on_date: str,
                         require_verified: bool = True) -> list[dict]:
         """Действующие на дату политики юрисдикции; по умолчанию только VERIFIED."""
