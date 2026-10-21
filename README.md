@@ -19,6 +19,7 @@
 - [docs/ARCHITECTURE_AND_GATES.md](docs/ARCHITECTURE_AND_GATES.md) — рекомендуемая архитектура и условия перехода между этапами.
 - [docs/DATA_CONTRACT.md](docs/DATA_CONTRACT.md) — будущие входные данные, единицы, происхождение и валидация.
 - [docs/PHASE1.md](docs/PHASE1.md) — отчёт по реализованному этапу 1–2: каркас, валидация, хранилище, метрики, демо, тесты.
+- [docs/PHASE3.md](docs/PHASE3.md) — отчёт по этапу 3: базовые прогнозы, хронологический backtest, интервалы, дрейф.
 - [AGENTS.md](AGENTS.md) — обязательные правила для ИИ, работающего в этом репозитории.
 - [templates/sessions.csv](templates/sessions.csv) и [templates/observations.csv](templates/observations.csv) — пустые шаблоны, не результаты школы.
 
@@ -29,16 +30,20 @@
 ориентиром для этапа эксплуатации и требует отдельного разрешения на установку).
 
 ```bash
-python3 -m unittest discover -s tests          # 92 теста
-python3 -m sra demo --dir data/demo --seed 42  # изолированное синтетическое демо
+python3 -m unittest discover -s tests          # 121 тест
+python3 -m sra demo --dir data/demo --seed 42  # изолированное синтетическое демо + backtest прогнозов
+python3 -m sra forecast --db data/demo/demo.sqlite3 --environment demo \
+  --school-id SCH-DEMO-001                     # backtest базовых прогнозов (этап 3)
 python3 -m sra --help                          # все команды (init-db, import, metrics,
-                                               # verify, revise, policies, decide, selfcheck, audit)
+                                               # verify, revise, policies, decide, forecast,
+                                               # selfcheck, audit)
 ```
 
-Статус: каркас и демо проверены автотестами; реальных данных, моделей,
-нормативов и одобрений в проекте НЕТ; реальное вмешательство заблокировано
-по построению (решение по умолчанию NO_CHANGE). Подробности и границы — в
-[docs/PHASE1.md](docs/PHASE1.md).
+Статус: каркас, демо и базовые прогнозы проверены автотестами (121); реальных
+данных, обученных моделей, нормативов и одобрений в проекте НЕТ; при нехватке
+данных прогноз возвращает DATA_NOT_READY; реальное вмешательство заблокировано
+по построению (решение по умолчанию NO_CHANGE). Подробности — в
+[docs/PHASE1.md](docs/PHASE1.md) и [docs/PHASE3.md](docs/PHASE3.md).
 
 ## Основной принцип
 

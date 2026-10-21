@@ -46,6 +46,25 @@ class TestDemoPipeline(unittest.TestCase):
         self.assertEqual(d["mode"], enums.MODE_DEMO)
         self.assertTrue(d["missing_conditions"])
 
+    def test_forecast_section(self):
+        f = self.report.get("forecast")
+        self.assertIsNotNone(f)
+        self.assertEqual(f["status"], "OK")  # 30 дней синтетики достаточно
+        self.assertEqual(f["artifact_nature"], enums.SIMULATED)
+        names = {m["name"] for m in f["models"]}
+        self.assertEqual(names, {"naive", "seasonal_naive", "moving_average"})
+        self.assertTrue(f["model_cards"], "карты моделей должны быть сохранены в демо-БД")
+
+    def test_model_cards_in_demo_db(self):
+        store = EvidenceStore(self.tmp / "demo" / "demo.sqlite3", enums.ENV_DEMO,
+                              clock=CLOCK)
+        try:
+            cards = store.get_model_cards()
+            self.assertTrue(cards)
+            self.assertTrue(all(c["model_id"].startswith("sra.forecast.") for c in cards))
+        finally:
+            store.close()
+
     def test_selfcheck_ok(self):
         self.assertTrue(all(r["ok"] for r in self.report["selfcheck"]),
                         msg=json.dumps(self.report["selfcheck"], ensure_ascii=False))

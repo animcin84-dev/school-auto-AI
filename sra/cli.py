@@ -8,6 +8,7 @@
   revise      — ревизия записи (причина + новая recorded_at; VERIFIED -> повторная проверка)
   policies    — регистрация/проверка/поиск политик
   decide      — предложение действия (этап 1: всегда NO_CHANGE с причинами)
+  forecast    — хронологический backtest базовых прогнозов (этап 3; DATA_NOT_READY при нехватке данных)
   selfcheck   — проверка инвариантов хранилища
   audit       — хвост журнала аудита
   demo        — изолированное синтетическое демо (DEMO-среда)
@@ -186,6 +187,47 @@ def cmd_decide(args) -> int:
         store.close()
 
 
+def cmd_forecast(args) -> int:
+    from sra.forecasting.backtest import run_backtest
+    from sra.forecasting.series import make_snapshot_fn
+    store = EvidenceStore(args.db, args.environment)
+    try:
+        # Часовой пояс школы — из её сессий (не пояс сервера); иначе --timezone.
+        sessions = store.fetch_sessions(school_id=args.school_id)
+        tz_name = args.timezone or (sessions[-1].timezone if sessions else "Asia/Almaty")
+        report = run_backtest(
+            snapshot_fn=make_snapshot_fn(store, args.school_id, args.meal_type),
+            test_days=args.test_days, calib_days=args.calib_days,
+            min_train=args.min_train, decision_hour=args.decision_hour,
+            tz_name=tz_name, seasonal_weeks=args.seasonal_weeks,
+            moving_avg_window=args.window,
+            exclude_censored=not args.include_censored_in_train,
+            environment=store.environment)
+        cards = []
+        if not args.no_save_cards and report["status"] == enums.METRIC_OK:
+            for m in report.get("models", []):
+                if m.get("status") != enums.FORECAST_OK:
+                    continue
+                card = store.save_model_card(
+                    model_id=f"sra.forecast.{m['name']}", model_name=m["name"],
+                    params=m["params"],
+                    data_meta={"school_id": args.school_id, "meal_type": args.meal_type,
+                               "windows": report["windows"],
+                               "dataset_version": store.get_dataset_version()},
+                    metrics={"mae_g": m.get("mae_g"), "pinball": m.get("pinball"),
+                             "interval": m.get("interval"),
+                             "decision_proxy": m.get("decision_proxy"),
+                             "drift": m.get("drift")},
+                    actor=args.actor)
+                cards.append(card)
+        report["model_cards"] = cards
+        report["school_timezone"] = tz_name
+        _print(report)
+        return 0
+    finally:
+        store.close()
+
+
 def cmd_selfcheck(args) -> int:
     store = EvidenceStore(args.db, args.environment)
     try:
@@ -217,6 +259,8 @@ def cmd_demo(args) -> int:
         "validation": report["validation"],
         "metric_report": report["metric_report"],
         "decision": report["decision"],
+        "forecast_status": report["forecast"]["status"],
+        "forecast_models": [m["name"] for m in report["forecast"].get("models", [])],
         "selfcheck_ok": all(r["ok"] for r in report["selfcheck"]),
         "report_file": str(Path(args.dir) / "demo_report.json"),
     })
@@ -305,6 +349,24 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--jurisdiction", default="KZ")
     sp.add_argument("--mode", choices=sorted(enums.DECISION_MODES), default=None)
     sp.set_defaults(func=cmd_decide)
+
+    sp = sub.add_parser("forecast", help="backtest базовых прогнозов (этап 3)")
+    db_args(sp)
+    sp.add_argument("--school-id", required=True)
+    sp.add_argument("--meal-type", default="LUNCH")
+    sp.add_argument("--test-days", type=int, default=10)
+    sp.add_argument("--calib-days", type=int, default=8)
+    sp.add_argument("--min-train", type=int, default=10)
+    sp.add_argument("--decision-hour", type=int, default=18,
+                    help="час решения D-1 по школьному времени")
+    sp.add_argument("--seasonal-weeks", type=int, default=3)
+    sp.add_argument("--window", type=int, default=4, help="окно скользящего среднего")
+    sp.add_argument("--include-censored-in-train", action="store_true",
+                    help="по умолчанию цензурированные дни исключены из обучения")
+    sp.add_argument("--timezone", default=None, help="иначе берётся из сессий школы")
+    sp.add_argument("--no-save-cards", action="store_true")
+    sp.add_argument("--actor", default="forecaster")
+    sp.set_defaults(func=cmd_forecast)
 
     sp = sub.add_parser("selfcheck", help="проверка инвариантов хранилища")
     db_args(sp)

@@ -126,6 +126,22 @@ CREATE TABLE policies (
     PRIMARY KEY (policy_id, version)
 );
 """),
+    # Миграция 2 (этап 3): реестр версий моделей прогноза (model cards).
+    (2, """
+CREATE TABLE model_cards (
+    model_card_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    model_id TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    model_name TEXT NOT NULL,
+    params TEXT NOT NULL,
+    data_meta TEXT NOT NULL,
+    metrics TEXT,
+    environment TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    created_by TEXT NOT NULL,
+    UNIQUE (model_id, version)
+);
+"""),
 ]
 
 _ENTITY_TABLE = {"session": "sessions_current", "observation": "observations_current"}
@@ -425,25 +441,88 @@ class EvidenceStore:
         }
 
     def asof(self, entity_type: str, cutoff_iso: str) -> list[dict]:
-        """Состояние данных на момент cutoff: последняя ревизия с recorded_at <= cutoff.
+        """Состояние знаний на момент cutoff: последняя (по revision_id) ревизия
+        каждой сущности с recorded_at <= cutoff.
 
         Защита от утечки будущего: поздние исправления не видны в историческом
-        срезе, если на момент решения они ещё не появились.
+        срезе, если на момент решения они ещё не появились. Сравнение времени —
+        в UTC (aware-датETIME), поэтому разные offset в recorded_at корректны;
+        строковое сравнение здесь было бы небезопасно.
         """
         table = _ENTITY_TABLE.get(entity_type)
         if table is None:
             raise ValidationError(f"неизвестный тип сущности {entity_type!r}", code="E_BAD_ENTITY")
+        try:
+            cutoff = datetime.fromisoformat(cutoff_iso)
+            if cutoff.tzinfo is None or cutoff.utcoffset() is None:
+                raise ValueError
+        except ValueError:
+            raise ValidationError(
+                f"cutoff должен быть ISO-8601 с явным offset: {cutoff_iso!r}",
+                code="E_BAD_CUTOFF")
+        cutoff_utc = cutoff.astimezone(timezone.utc)
         rows = self._conn.execute(
-            f"SELECT entity_id, revision_id, payload, recorded_at FROM revisions "
-            f"WHERE entity_type = ? AND recorded_at <= ? "
-            f"ORDER BY entity_id, recorded_at, revision_id",
-            (entity_type, cutoff_iso)).fetchall()
+            "SELECT entity_id, revision_id, payload, recorded_at FROM revisions "
+            "WHERE entity_type = ? ORDER BY revision_id",
+            (entity_type,)).fetchall()
         latest: dict[str, sqlite3.Row] = {}
         for r in rows:
-            latest[r["entity_id"]] = r
+            try:
+                ra = datetime.fromisoformat(r["recorded_at"])
+            except ValueError:
+                continue
+            if ra.tzinfo is None or ra.utcoffset() is None:
+                continue
+            if ra.astimezone(timezone.utc) <= cutoff_utc:
+                latest[r["entity_id"]] = r
         return [{"entity_id": r["entity_id"], "revision_id": r["revision_id"],
                  "payload": json.loads(r["payload"]), "recorded_at": r["recorded_at"]}
                 for r in latest.values()]
+
+    def get_dataset_version(self) -> int:
+        row = self._conn.execute("SELECT value FROM meta WHERE key='dataset_version'").fetchone()
+        return int(row["value"])
+
+    def save_model_card(self, *, model_id: str, model_name: str, params: dict,
+                        data_meta: dict, metrics: dict | None = None,
+                        actor: str = "system", environment: str | None = None) -> dict:
+        """Регистрирует новую версию модели (model card). Версия назначается автоматически."""
+        if not model_id or not model_name:
+            raise ValidationError("model card требует model_id и model_name",
+                                  code="E_MODEL_CARD_PARAMS")
+        row = self._conn.execute(
+            "SELECT COALESCE(MAX(version), 0) v FROM model_cards WHERE model_id = ?",
+            (model_id,)).fetchone()
+        version = int(row["v"]) + 1
+        now = self._clock()
+        with self._conn:
+            self._conn.execute(
+                "INSERT INTO model_cards(model_id, version, model_name, params, data_meta, "
+                "metrics, environment, created_at, created_by) VALUES (?,?,?,?,?,?,?,?,?)",
+                (model_id, version, model_name,
+                 json.dumps(params, ensure_ascii=False),
+                 json.dumps(data_meta, ensure_ascii=False),
+                 json.dumps(metrics, ensure_ascii=False) if metrics else None,
+                 environment or self.environment, now, actor))
+            self._audit(actor, "MODEL_CARD_SAVED", entity_type="model_card",
+                        entity_id=f"{model_id}@v{version}",
+                        details={"model_name": model_name})
+        return {"model_id": model_id, "version": version}
+
+    def get_model_cards(self, model_id: str | None = None) -> list[dict]:
+        q = ("SELECT model_id, version, model_name, params, data_meta, metrics, environment, "
+             "created_at, created_by FROM model_cards")
+        args: list = []
+        if model_id is not None:
+            q += " WHERE model_id = ?"
+            args.append(model_id)
+        q += " ORDER BY model_id, version"
+        return [{"model_id": r["model_id"], "version": r["version"], "model_name": r["model_name"],
+                 "params": json.loads(r["params"]), "data_meta": json.loads(r["data_meta"]),
+                 "metrics": json.loads(r["metrics"]) if r["metrics"] else None,
+                 "environment": r["environment"], "created_at": r["created_at"],
+                 "created_by": r["created_by"]}
+                for r in self._conn.execute(q, args)]
 
     # --- Ревизии и проверка --------------------------------------------------------
     def revise(self, entity_type: str, entity_id: str, changes: dict, *,

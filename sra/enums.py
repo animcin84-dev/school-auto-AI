@@ -72,3 +72,14 @@ METRIC_UNAVAILABLE = "UNAVAILABLE"
 POLICY_UNVERIFIED = "UNVERIFIED"
 POLICY_VERIFIED = "VERIFIED"
 POLICY_RETIRED = "RETIRED"
+
+# --- Прогнозирование -----------------------------------------------------------------
+# Явный статус «данных недостаточно» — вместо фиктивной обученной модели.
+DATA_NOT_READY = "DATA_NOT_READY"
+# Статусы по дням в backtest: прогноз построен / холодный старт (мало истории).
+FORECAST_OK = "OK"
+FORECAST_COLD_START = "COLD_START"
+# Статус детектора дрейфа.
+DRIFT_OK = "OK"
+DRIFT_DETECTED = "DRIFT_DETECTED"
+DRIFT_INSUFFICIENT = "INSUFFICIENT_DATA"

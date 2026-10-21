@@ -210,6 +210,67 @@ class TestVerificationProcedure(StoreTestCase):
             store.close()
 
 
+class TestAsofMixedOffsets(StoreTestCase):
+    """As-of сравнивает время в UTC: разные offset в recorded_at корректны.
+
+    Ревизия recorded_at = 2026-10-02T12:00:00+00:00 (= 17:00 +05) НЕ видна
+    в срезе 2026-10-02T16:00:00+05:00, хотя строковое сравнение было бы неверно.
+    """
+
+    def test_asof_uses_utc_semantics(self):
+        store = self.real_store()
+        try:
+            store.import_sessions([self._session(meals_served="90")], actor="a")
+            store.revise("session", "S1", {"meals_served": 70},
+                         reason="уточнение", actor="a",
+                         recorded_at="2026-10-02T12:00:00+00:00")
+            before = store.asof("session", "2026-10-02T16:00:00+05:00")
+            after = store.asof("session", "2026-10-02T18:00:00+05:00")
+            self.assertEqual(before[0]["payload"]["meals_served"], 90)
+            self.assertEqual(after[0]["payload"]["meals_served"], 70)
+        finally:
+            store.close()
+
+    def test_asof_rejects_naive_cutoff(self):
+        store = self.real_store()
+        try:
+            from sra.errors import ValidationError
+            with self.assertRaises(ValidationError) as cm:
+                store.asof("session", "2026-10-02T16:00:00")
+            self.assertEqual(cm.exception.code, "E_BAD_CUTOFF")
+        finally:
+            store.close()
+
+
+class TestModelCards(StoreTestCase):
+    def test_versions_autoincrement_and_audit(self):
+        store = self.real_store()
+        try:
+            c1 = store.save_model_card(model_id="sra.forecast.naive", model_name="naive",
+                                       params={}, data_meta={"school_id": "SCH-1"},
+                                       metrics={"mae_g": 20.0}, actor="t")
+            c2 = store.save_model_card(model_id="sra.forecast.naive", model_name="naive",
+                                       params={"weeks": 3}, data_meta={}, actor="t")
+            self.assertEqual(c1["version"], 1)
+            self.assertEqual(c2["version"], 2)
+            cards = store.get_model_cards("sra.forecast.naive")
+            self.assertEqual([c["version"] for c in cards], [1, 2])
+            self.assertEqual(cards[0]["metrics"]["mae_g"], 20.0)
+            actions = [e["action"] for e in store.audit_tail(100)]
+            self.assertEqual(actions.count("MODEL_CARD_SAVED"), 2)
+        finally:
+            store.close()
+
+    def test_get_dataset_version(self):
+        store = self.real_store()
+        try:
+            v0 = store.get_dataset_version()
+            store.import_sessions([self._session()], actor="a")
+            self.assertEqual(store.get_dataset_version(), v0 + 1)
+        finally:
+            store.close()
+
+
 class TestSelfcheck(StoreTestCase):
     def test_selfcheck_ok_on_healthy_store(self):
         store = self.real_store()

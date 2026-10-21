@@ -74,7 +74,33 @@ def run_demo(out_dir: str | Path = "data/demo", *, seed: int = 42, n_days: int =
     proposal = propose_action(store, policies, school_id=manifest["school_id"],
                               target_date=sessions[-1].service_date.isoformat()).to_dict()
 
-    # 7. Самопроверка инвариантов хранилища.
+    # 7. Базовые прогнозы (этап 3) на тех же синтетических данных.
+    # Тестовое окно меньше стандартного: демо-ряд короткий; при нехватке точек
+    # честный статус DATA_NOT_READY.
+    from ..forecasting.backtest import run_backtest
+    from ..forecasting.series import make_snapshot_fn
+    forecast_report = run_backtest(
+        snapshot_fn=make_snapshot_fn(store, manifest["school_id"], "LUNCH"),
+        test_days=min(5, max(1, manifest["n_sessions"] // 6)),
+        calib_days=5, min_train=5,
+        environment=enums.ENV_DEMO)
+    forecast_cards = []
+    if forecast_report.get("status") == enums.METRIC_OK:
+        for m in forecast_report.get("models", []):
+            if m.get("status") != enums.FORECAST_OK:
+                continue
+            forecast_cards.append(store.save_model_card(
+                model_id=f"sra.forecast.{m['name']}", model_name=m["name"],
+                params=m["params"],
+                data_meta={"school_id": manifest["school_id"], "meal_type": "LUNCH",
+                           "windows": forecast_report["windows"],
+                           "dataset_version": store.get_dataset_version()},
+                metrics={"mae_g": m.get("mae_g"), "pinball": m.get("pinball"),
+                         "interval": m.get("interval")},
+                actor="demo", environment=enums.ENV_DEMO))
+    forecast_report["model_cards"] = forecast_cards
+
+    # 8. Самопроверка инвариантов хранилища.
     selfcheck = store.selfcheck()
 
     report = {
@@ -92,6 +118,7 @@ def run_demo(out_dir: str | Path = "data/demo", *, seed: int = 42, n_days: int =
         "validation": {"sessions": session_recs, "observations": obs_recs},
         "metric_report": metric_report,
         "decision": proposal,
+        "forecast": forecast_report,
         "selfcheck": selfcheck,
     }
     (out / "demo_report.json").write_text(
