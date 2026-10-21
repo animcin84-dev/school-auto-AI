@@ -153,6 +153,57 @@ def run_demo(out_dir: str | Path = "data/demo", *, seed: int = 42, n_days: int =
         delta_max_pct=opt_values["delta_max_pct_of_baseline"],
         grid_step_g=opt_values["grid_step_g"])
 
+    # 7c. SHADOW-контур (этап 5а): фазы (синтетические переходы DEMO), shadow-дни,
+    # мониторинг качества и проект плана оценки. Ворота фаз могут честно
+    # заблокировать SHADOW на коротком ряде — демо это фиксирует, а не обходит.
+    from ..errors import GuardError
+    from ..monitoring import monitor_shadow
+    from ..phases import PhaseManager
+    from ..shadow import run_shadow
+    pm = PhaseManager(store, policies)
+    school = manifest["school_id"]
+    gate_block = None
+    try:
+        if pm.current(school) is None:
+            pm.transition(school, enums.PHASE_CALIBRATION, actor="demo")
+        if pm.current(school)["phase"] == enums.PHASE_CALIBRATION:
+            pm.transition(school, enums.PHASE_BASELINE, actor="demo",
+                          protocol_ref="synthetic-protocol:v1 (DEMO; не реальный протокол)")
+        if pm.current(school)["phase"] == enums.PHASE_BASELINE:
+            pm.transition(school, enums.PHASE_SHADOW, actor="demo",
+                          policy_id=DEMO_OPT_POLICY["policy_id"])
+    except GuardError as e:
+        gate_block = e.to_dict()
+    study_phase = pm.current(school)
+    in_shadow = study_phase["phase"] == enums.PHASE_SHADOW
+    if in_shadow:
+        shadow_report = run_shadow(store, policies, school_id=school,
+                                   meal_type="LUNCH", policy_id=DEMO_OPT_POLICY["policy_id"],
+                                   days=min(10, max(1, manifest["n_sessions"] // 4)),
+                                   actor="demo")
+        monitoring_report = monitor_shadow(store, school, "LUNCH")
+    else:
+        shadow_report = {"status": enums.DATA_NOT_READY,
+                         "reason": f"фаза SHADOW не достигнута: {gate_block}"}
+        monitoring_report = {"status": enums.DATA_NOT_READY,
+                             "reason": "фаза SHADOW не достигнута"}
+    evaluation_plan = None
+    recs = [r for r in store.list_shadow_records(school, "LUNCH")
+            if r["pred_g"] is not None and r["y_g"] is not None]
+    if len(recs) >= 8:
+        from statistics import mean as _mean, stdev as _stdev
+        from ..evaluation.design import build_evaluation_plan
+        sigma = _stdev([r["y_g"] - r["pred_g"] for r in recs])
+        baseline_waste = _mean([max(r["actual_prepared_g"] - r["y_g"], 0.0)
+                                for r in recs if r["actual_prepared_g"] is not None])
+        evaluation_plan = build_evaluation_plan(
+            school_id=school, design="two_arm_parallel",
+            sigma_g=sigma, baseline_waste_g_per_day=baseline_waste,
+            expected_effect_rel=0.20)
+    else:
+        evaluation_plan = {"status": enums.DATA_NOT_READY,
+                           "reason": "shadow-дней с прогнозом и фактом меньше 8"}
+
     # 8. Самопроверка инвариантов хранилища.
     selfcheck = store.selfcheck()
 
@@ -174,6 +225,10 @@ def run_demo(out_dir: str | Path = "data/demo", *, seed: int = 42, n_days: int =
         "forecast": forecast_report,
         "optimizer_decision": optimizer_decision,
         "strategy_comparison": strategy_comparison,
+        "study_phase": study_phase,
+        "shadow": shadow_report,
+        "monitoring": monitoring_report,
+        "evaluation_plan": evaluation_plan,
         "selfcheck": selfcheck,
     }
     (out / "demo_report.json").write_text(

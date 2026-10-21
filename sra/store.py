@@ -170,6 +170,43 @@ CREATE TABLE action_executions (
     UNIQUE (proposal_id, proposal_hash)
 );
 """),
+    # Миграция 4 (этап 5а): фазы исследования по школам (append-only журнал
+    # переходов) и shadow-записи — симуляционные предложения без исполнения
+    # с исходами фактических дней. Уникальность по content_key делает
+    # повторный прогон того же окна идемпотентным.
+    (4, """
+CREATE TABLE phase_events (
+    phase_event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    school_id TEXT NOT NULL,
+    phase TEXT NOT NULL,
+    protocol_ref TEXT,
+    actor TEXT NOT NULL,
+    decided_at TEXT NOT NULL,
+    notes TEXT
+);
+CREATE INDEX idx_phase_school ON phase_events(school_id);
+CREATE TABLE shadow_records (
+    shadow_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    school_id TEXT NOT NULL,
+    meal_type TEXT NOT NULL,
+    target_date TEXT NOT NULL,
+    content_key TEXT NOT NULL,
+    action TEXT NOT NULL,
+    proposal_hash TEXT NOT NULL,
+    planned_g REAL,
+    baseline_g REAL,
+    pred_g REAL,
+    pred_q10 REAL,
+    pred_q90 REAL,
+    y_g REAL,
+    actual_prepared_g REAL,
+    cost_delta_vs_actual REAL,
+    payload TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE (school_id, meal_type, target_date, content_key)
+);
+CREATE INDEX idx_shadow_school ON shadow_records(school_id, meal_type, target_date);
+"""),
 ]
 
 _ENTITY_TABLE = {"session": "sessions_current", "observation": "observations_current"}
@@ -793,6 +830,76 @@ class EvidenceStore:
         q += " ORDER BY approval_id"
         return [dict(r) for r in self._conn.execute(q, args)]
 
+    # --- Фазы исследования и shadow-записи (этап 5а) ---------------------------------
+    def add_phase_event(self, *, school_id: str, phase: str, actor: str,
+                        protocol_ref: str | None = None,
+                        notes: str | None = None) -> dict:
+        """Фиксирует переход фазы (append-only журнал). Валидация порядка/ворот —
+        в PhaseManager; хранилище проверяет только словарь фаз."""
+        if phase not in enums.STUDY_PHASES:
+            raise ValidationError(f"неизвестная фаза: {phase!r}", code="E_BAD_PHASE")
+        now = self._clock()
+        with self._conn:
+            self._conn.execute(
+                "INSERT INTO phase_events(school_id, phase, protocol_ref, actor, decided_at, notes) "
+                "VALUES (?,?,?,?,?,?)",
+                (school_id, phase, protocol_ref, actor, now, notes))
+            self._audit(actor, "PHASE_TRANSITION", entity_type="school_phase",
+                        entity_id=school_id, details={"phase": phase,
+                                                      "protocol_ref": protocol_ref})
+        return self.get_school_phase(school_id)
+
+    def get_school_phase(self, school_id: str) -> dict | None:
+        row = self._conn.execute(
+            "SELECT phase_event_id, school_id, phase, protocol_ref, actor, decided_at, notes "
+            "FROM phase_events WHERE school_id = ? ORDER BY phase_event_id DESC LIMIT 1",
+            (school_id,)).fetchone()
+        if row is None:
+            return None
+        return dict(row)
+
+    def add_shadow_record(self, *, school_id: str, meal_type: str, target_date: str,
+                          content_key: str, action: str, proposal_hash: str,
+                          planned_g: float | None, baseline_g: float | None,
+                          pred_g: float | None, pred_q10: float | None,
+                          pred_q90: float | None, y_g: float | None,
+                          actual_prepared_g: float | None,
+                          cost_delta_vs_actual: float | None,
+                          payload: dict) -> dict:
+        """Записывает shadow-день. Повтор того же содержания (content_key) —
+        идемпотентно пропускается; первая запись остаётся неизменной."""
+        try:
+            with self._conn:
+                cur = self._conn.execute(
+                    "INSERT INTO shadow_records(school_id, meal_type, target_date, content_key, "
+                    "action, proposal_hash, planned_g, baseline_g, pred_g, pred_q10, pred_q90, "
+                    "y_g, actual_prepared_g, cost_delta_vs_actual, payload, created_at) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (school_id, meal_type, target_date, content_key, action, proposal_hash,
+                     planned_g, baseline_g, pred_g, pred_q10, pred_q90, y_g,
+                     actual_prepared_g, cost_delta_vs_actual,
+                     json.dumps(payload, ensure_ascii=False), self._clock()))
+            return {"inserted": True, "shadow_id": cur.lastrowid}
+        except sqlite3.IntegrityError:
+            return {"inserted": False, "shadow_id": None}
+
+    def list_shadow_records(self, school_id: str, meal_type: str | None = None) -> list[dict]:
+        q = ("SELECT shadow_id, school_id, meal_type, target_date, content_key, action, "
+             "proposal_hash, planned_g, baseline_g, pred_g, pred_q10, pred_q90, y_g, "
+             "actual_prepared_g, cost_delta_vs_actual, payload, created_at "
+             "FROM shadow_records WHERE school_id = ?")
+        args: list = [school_id]
+        if meal_type is not None:
+            q += " AND meal_type = ?"
+            args.append(meal_type)
+        q += " ORDER BY target_date, shadow_id"
+        out = []
+        for r in self._conn.execute(q, args):
+            d = dict(r)
+            d["payload"] = json.loads(d["payload"])
+            out.append(d)
+        return out
+
     # --- Аудит и самопроверка ------------------------------------------------------
     def audit_tail(self, n: int = 50) -> list[dict]:
         rows = self._conn.execute(
@@ -867,4 +974,9 @@ class EvidenceStore:
         maxv = self._conn.execute("SELECT COALESCE(MAX(dataset_version),0) m FROM revisions").fetchone()["m"]
         cnt = int(self._conn.execute("SELECT value FROM meta WHERE key='dataset_version'").fetchone()["value"])
         add("dataset_version_counter", cnt >= maxv, {"counter": cnt, "max_used": maxv})
+        # 8. В REAL-среде исполнений действий быть не может (этап 4/5а).
+        if self.environment == enums.ENV_REAL:
+            n_exec = self._conn.execute(
+                "SELECT COUNT(*) n FROM action_executions").fetchone()["n"]
+            add("no_executions_in_real", n_exec == 0, {"executions": n_exec})
         return out

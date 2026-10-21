@@ -25,6 +25,7 @@ from .. import enums
 from ..decide import DecisionProposal, REASON_DESCRIPTIONS, propose_action
 from ..errors import NotFoundError, ValidationError
 from ..forecasting.pipeline import decision_forecast
+from ..forecasting.score import empirical_quantile
 from ..forecasting.series import eligible_points, make_snapshot_fn
 from .core import DemandScenarios, habitual_baseline, scenario_cost_deltas, solve_prepared_volume
 from .policies import check_policy_usable, validate_decision_policy
@@ -250,6 +251,13 @@ def propose_adjustment(store, policies, *, school_id: str, meal_type: str,
             "cost_chosen": solve["cost_chosen"],
             "improvement": solve["improvement"],
             "improvement_rel": solve["improvement_rel"],
+            "forecast": {
+                "pred_g": fc["pred_g"],
+                "q10_g": empirical_quantile(fc["residuals_g"], 0.1),
+                "q90_g": empirical_quantile(fc["residuals_g"], 0.9),
+                "n_scenarios": len(fc["residuals_g"]),
+                "cutoff_iso": fc["cutoff_iso"],
+            },
         },
         forecast_ref=forecast_ref,
         policy_refs=policy_refs,

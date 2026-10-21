@@ -11,6 +11,10 @@
   forecast    — хронологический backtest базовых прогнозов (этап 3; DATA_NOT_READY при нехватке данных)
   optimize    — симуляционное предложение изменения объёма (этап 4; REAL => NO_CHANGE)
   compare     — сравнение стратегий управления объёмом (SIMULATED)
+  phase       — фазы исследования школы (ворота переходов; INTERVENTION заблокирован)
+  shadow-run  — SHADOW-контур: симуляционные предложения по окну дней без исполнения
+  monitor     — мониторинг качества прогнозов по shadow-записям
+  design      — проект плана оценки эффекта (требуемый объём выборки)
   selfcheck   — проверка инвариантов хранилища
   audit       — хвост журнала аудита
   demo        — изолированное синтетическое демо (DEMO-среда)
@@ -286,6 +290,80 @@ def cmd_compare(args) -> int:
         store.close()
 
 
+def cmd_phase(args) -> int:
+    from sra.phases import PhaseManager
+    store = EvidenceStore(args.db, args.environment)
+    try:
+        policies = PolicyRegistry(store)
+        pm = PhaseManager(store, policies)
+        if args.action == "get":
+            _print(pm.current(args.school_id))
+            return 0
+        result = pm.transition(args.school_id, args.phase, actor=args.actor,
+                               protocol_ref=args.protocol_ref,
+                               policy_id=args.policy_id, meal_type=args.meal_type)
+        _print(result)
+        return 0
+    finally:
+        store.close()
+
+
+def cmd_shadow_run(args) -> int:
+    from sra.shadow import run_shadow
+    store = EvidenceStore(args.db, args.environment)
+    try:
+        policies = PolicyRegistry(store)
+        report = run_shadow(store, policies, school_id=args.school_id,
+                            meal_type=args.meal_type, policy_id=args.policy_id,
+                            days=args.days, actor=args.actor,
+                            decision_hour=args.decision_hour)
+        _print(report)
+        return 0
+    finally:
+        store.close()
+
+
+def cmd_monitor(args) -> int:
+    from sra.monitoring import monitor_shadow
+    store = EvidenceStore(args.db, args.environment)
+    try:
+        _print(monitor_shadow(store, args.school_id, args.meal_type,
+                              recent_k=args.recent_k))
+        return 0
+    finally:
+        store.close()
+
+
+def cmd_design(args) -> int:
+    from statistics import mean as _mean, stdev as _stdev
+    from sra.evaluation.design import build_evaluation_plan
+    store = EvidenceStore(args.db, args.environment)
+    try:
+        recs = [r for r in store.list_shadow_records(args.school_id, args.meal_type)
+                if r["pred_g"] is not None and r["y_g"] is not None]
+        if len(recs) < args.min_records:
+            _print({"status": enums.DATA_NOT_READY,
+                    "reason": f"для оценки σ нужно ≥{args.min_records} shadow-дней с "
+                              "прогнозом и фактом; запустите shadow-run",
+                    "n_records": len(recs)})
+            return 2
+        residuals = [r["y_g"] - r["pred_g"] for r in recs]
+        sigma = _stdev(residuals)
+        baseline_waste = _mean([max(r["actual_prepared_g"] - r["y_g"], 0.0)
+                                for r in recs if r["actual_prepared_g"] is not None])
+        plan = build_evaluation_plan(
+            school_id=args.school_id, design=args.design, sigma_g=sigma,
+            baseline_waste_g_per_day=baseline_waste,
+            expected_effect_rel=args.effect_rel, alpha=args.alpha,
+            power=args.power, school_days_per_week=args.days_per_week)
+        plan["sigma_estimated_from"] = {"n_days": len(recs), "stdev_residuals_g": sigma,
+                                        "source": "shadow-записи (замена, не дизайн-σ)"}
+        _print(plan)
+        return 0
+    finally:
+        store.close()
+
+
 def cmd_selfcheck(args) -> int:
     store = EvidenceStore(args.db, args.environment)
     try:
@@ -322,6 +400,12 @@ def cmd_demo(args) -> int:
         "optimizer_decision": {k: report["optimizer_decision"][k]
                                for k in ("action", "action_status", "mode", "reasons")
                                if k in report["optimizer_decision"]},
+        "study_phase": report.get("study_phase"),
+        "shadow": {k: report["shadow"][k] for k in ("status", "days", "inserted",
+                                                    "records_total", "actions")
+                   if k in report["shadow"]},
+        "monitoring_status": report.get("monitoring", {}).get("status"),
+        "evaluation_plan_status": report.get("evaluation_plan", {}).get("status"),
         "selfcheck_ok": all(r["ok"] for r in report["selfcheck"]),
         "report_file": str(Path(args.dir) / "demo_report.json"),
     })
@@ -447,6 +531,48 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--test-days", type=int, default=10)
     sp.add_argument("--decision-hour", type=int, default=18)
     sp.set_defaults(func=cmd_compare)
+
+    sp = sub.add_parser("phase", help="фазы исследования школы")
+    db_args(sp)
+    sp.add_argument("--action", required=True, choices=["get", "set"])
+    sp.add_argument("--school-id", required=True)
+    sp.add_argument("--phase", choices=sorted(enums.STUDY_PHASES))
+    sp.add_argument("--protocol-ref", default=None)
+    sp.add_argument("--policy-id", default=None)
+    sp.add_argument("--meal-type", default="LUNCH")
+    sp.add_argument("--actor", default="researcher")
+    sp.set_defaults(func=cmd_phase)
+
+    sp = sub.add_parser("shadow-run", help="SHADOW-контур по окну дней (без исполнения)")
+    db_args(sp)
+    sp.add_argument("--school-id", required=True)
+    sp.add_argument("--meal-type", default="LUNCH")
+    sp.add_argument("--policy-id", required=True)
+    sp.add_argument("--days", type=int, default=7)
+    sp.add_argument("--decision-hour", type=int, default=18)
+    sp.add_argument("--actor", default="shadow")
+    sp.set_defaults(func=cmd_shadow_run)
+
+    sp = sub.add_parser("monitor", help="мониторинг качества прогнозов (shadow)")
+    db_args(sp)
+    sp.add_argument("--school-id", required=True)
+    sp.add_argument("--meal-type", default="LUNCH")
+    sp.add_argument("--recent-k", type=int, default=10)
+    sp.set_defaults(func=cmd_monitor)
+
+    sp = sub.add_parser("design", help="проект плана оценки эффекта")
+    db_args(sp)
+    sp.add_argument("--school-id", required=True)
+    sp.add_argument("--meal-type", default="LUNCH")
+    sp.add_argument("--effect-rel", type=float, required=True,
+                    help="ожидаемое относительное снижение отходов (0,1)")
+    sp.add_argument("--design", choices=["two_arm_parallel", "before_after"],
+                    default="two_arm_parallel")
+    sp.add_argument("--alpha", type=float, default=0.05)
+    sp.add_argument("--power", type=float, default=0.80)
+    sp.add_argument("--days-per-week", type=int, default=5)
+    sp.add_argument("--min-records", type=int, default=8)
+    sp.set_defaults(func=cmd_design)
 
     sp = sub.add_parser("selfcheck", help="проверка инвариантов хранилища")
     db_args(sp)

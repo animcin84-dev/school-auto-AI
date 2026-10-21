@@ -162,11 +162,21 @@ class TestCliSmoke(unittest.TestCase):
 
     def test_demo_command_and_metrics_command(self):
         demo_dir = self.tmp / "demo"
+        # короткое демо: ворота фаз честно блокируют SHADOW, но команда завершается
         rc = cli_main(["demo", "--dir", str(demo_dir), "--seed", "42", "--days", "10"])
         self.assertEqual(rc, 0)
         rc = cli_main(["metrics", "--db", str(demo_dir / "demo.sqlite3"),
                        "--environment", "demo", "--school-id", "SCH-DEMO-001"])
         self.assertEqual(rc, 0)
+
+    def test_demo_short_window_gate_blocks_shadow_gracefully(self):
+        demo_dir = self.tmp / "demo-short"
+        rc = cli_main(["demo", "--dir", str(demo_dir), "--seed", "42", "--days", "10"])
+        self.assertEqual(rc, 0)
+        report = json.loads((demo_dir / "demo_report.json").read_text(encoding="utf-8"))
+        self.assertLess(report["study_phase"]["phase"], "SHADOW")
+        self.assertEqual(report["shadow"]["status"], "DATA_NOT_READY")
+        self.assertEqual(report["monitoring"]["status"], "DATA_NOT_READY")
 
     def test_import_into_real_db(self):
         real_db = self.tmp / "real.sqlite3"
@@ -196,6 +206,15 @@ class TestCliSmoke(unittest.TestCase):
         rc = cli_main(["selfcheck", "--db", str(demo_dir / "demo.sqlite3"),
                        "--environment", "demo"])
         self.assertEqual(rc, 0)
+
+    def test_demo_full_path_reaches_shadow(self):
+        demo_dir = self.tmp / "demo-long"
+        rc = cli_main(["demo", "--dir", str(demo_dir), "--seed", "42", "--days", "60"])
+        self.assertEqual(rc, 0)
+        report = json.loads((demo_dir / "demo_report.json").read_text(encoding="utf-8"))
+        self.assertEqual(report["study_phase"]["phase"], "SHADOW")
+        self.assertEqual(report["shadow"]["status"], "OK")
+        self.assertEqual(report["shadow"]["inserted"], report["shadow"]["days"])
 
 
 if __name__ == "__main__":
