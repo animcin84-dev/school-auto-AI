@@ -18,8 +18,27 @@
 - [PROJECT_BRIEF.md](PROJECT_BRIEF.md) — смысл проекта, границы и научная задача.
 - [docs/ARCHITECTURE_AND_GATES.md](docs/ARCHITECTURE_AND_GATES.md) — рекомендуемая архитектура и условия перехода между этапами.
 - [docs/DATA_CONTRACT.md](docs/DATA_CONTRACT.md) — будущие входные данные, единицы, происхождение и валидация.
+- [docs/PHASE1.md](docs/PHASE1.md) — отчёт по реализованному этапу 1–2: каркас, валидация, хранилище, метрики, демо, тесты.
 - [AGENTS.md](AGENTS.md) — обязательные правила для ИИ, работающего в этом репозитории.
 - [templates/sessions.csv](templates/sessions.csv) и [templates/observations.csv](templates/observations.csv) — пустые шаблоны, не результаты школы.
+
+## Реализация (этапы 1–2 выполнены)
+
+Ядро — модульный монолит `sra/` на чистой стандартной библиотеке Python 3.11
+(без сторонних зависимостей; целевой стек FastAPI/PostgreSQL/React остаётся
+ориентиром для этапа эксплуатации и требует отдельного разрешения на установку).
+
+```bash
+python3 -m unittest discover -s tests          # 92 теста
+python3 -m sra demo --dir data/demo --seed 42  # изолированное синтетическое демо
+python3 -m sra --help                          # все команды (init-db, import, metrics,
+                                               # verify, revise, policies, decide, selfcheck, audit)
+```
+
+Статус: каркас и демо проверены автотестами; реальных данных, моделей,
+нормативов и одобрений в проекте НЕТ; реальное вмешательство заблокировано
+по построению (решение по умолчанию NO_CHANGE). Подробности и границы — в
+[docs/PHASE1.md](docs/PHASE1.md).
 
 ## Основной принцип
 
