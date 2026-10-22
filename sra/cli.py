@@ -726,6 +726,10 @@ def cmd_demo(args) -> int:
         "monitoring_status": report.get("monitoring", {}).get("status"),
         "evaluation_plan_status": report.get("evaluation_plan", {}).get("status"),
         "explanation_first_line": (report.get("explanation", "").splitlines() or [""])[0],
+        "ml_track": {k: report["ml_track"][k]
+                     for k in ("data_nature", "note", "diners_backtest",
+                               "composite_backtest", "nutrition_alerts")
+                     if k in report.get("ml_track", {})},
         "explanation_lines": len(report.get("explanation", "").splitlines()),
         "selfcheck_ok": all(r["ok"] for r in report["selfcheck"]),
         "report_file": str(Path(args.dir) / "demo_report.json"),

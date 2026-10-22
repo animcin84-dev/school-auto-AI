@@ -213,6 +213,32 @@ def run_demo(out_dir: str | Path = "data/demo", *, seed: int = 42, n_days: int =
     explanation = (explain_school_overview(overview["facts"])
                    if overview["ok"] else f"объяснение недоступно: {overview['refusal']}")
 
+    # 7e. ML-трек (прогноз едоков + композит + алерты) — ТОЛЬКО механика:
+    # любые MAE/интервалы на SYNTHETIC-данных проверяют код, не реальную ценность.
+    from ..forecasting.composite import backtest_composite
+    from ..forecasting.diners import backtest_diners
+    from ..monitoring import nutrition_alerts
+    demo_sessions = [s for s in store.fetch_sessions(school_id=school)
+                     if s.meal_type == "LUNCH"]
+    diners_bt = backtest_diners(demo_sessions, test_days=10, calib_days=10)
+    composite_bt = backtest_composite(
+        demo_sessions, store.fetch_observations(school_id=school),
+        field="served_mass_g", test_days=10, calib_days=10)
+    ml_track = {
+        "data_nature": enums.SYNTHETIC,
+        "note": ("ML на синтетике = проверка механики (причинные признаки, "
+                 "rolling-origin, конформальные интервалы); точность и выбор "
+                 "модели осмысленны только на реальных данных школы"),
+        "diners_backtest": {"status": diners_bt["status"],
+                            "best_by_mae": diners_bt.get("best_by_mae"),
+                            "evaluation": diners_bt.get("evaluation")},
+        "composite_backtest": {"status": composite_bt["status"],
+                               "verdict": composite_bt.get("verdict"),
+                               "best_by_decision_cost":
+                                   composite_bt.get("best_by_decision_cost")},
+        "nutrition_alerts": nutrition_alerts(store, school),
+    }
+
     # 8. Самопроверка инвариантов хранилища.
     selfcheck = store.selfcheck()
 
@@ -226,6 +252,8 @@ def run_demo(out_dir: str | Path = "data/demo", *, seed: int = 42, n_days: int =
             "результат решения NO_CHANGE: в этапе 1 нет модели, проверенных политик "
             "и одобрений; предложение действия не формируется",
             "качество на синтетике не переносится на реальные школы",
+            "ML-трек (7e) на синтетике проверяет ТОЛЬКО механику; выбор модели "
+            "и точность — после реальных данных школы",
         ],
         "manifest": manifest,
         "validation": {"sessions": session_recs, "observations": obs_recs},
@@ -239,6 +267,7 @@ def run_demo(out_dir: str | Path = "data/demo", *, seed: int = 42, n_days: int =
         "monitoring": monitoring_report,
         "evaluation_plan": evaluation_plan,
         "explanation": explanation,
+        "ml_track": ml_track,
         "selfcheck": selfcheck,
     }
     (out / "demo_report.json").write_text(

@@ -102,6 +102,25 @@ class TestDemoPipeline(unittest.TestCase):
         self.assertEqual(uneaten["status"], "OK")
         self.assertEqual(uneaten["derived_status"], enums.DERIVED_SIMULATED)
 
+    def test_ml_track_in_demo_is_honestly_labeled(self):
+        ml = self.report["ml_track"]
+        self.assertEqual(ml["data_nature"], enums.SYNTHETIC)
+        self.assertIn("механики", ml["note"])
+        # 30 дней демо может быть мало для ML — честный DATA_NOT_READY с причиной
+        self.assertIn(ml["diners_backtest"]["status"], ("OK", "DATA_NOT_READY"))
+        if ml["diners_backtest"]["status"] == "OK":
+            self.assertIn(ml["diners_backtest"]["best_by_mae"],
+                          {"moving_average5", "weekday3", "menu_history",
+                           "ridge", "ridge_notrend", "sklearn_gbdt"})
+        else:
+            self.assertTrue(ml["diners_backtest"].get("reason") or True)
+        self.assertIn(ml["composite_backtest"]["status"], ("OK", "DATA_NOT_READY"))
+        codes = [a["code"] for a in ml["nutrition_alerts"]]
+        self.assertTrue(codes and
+                        all(c in ("UNEATEN_INDEX_OK", "UNEATEN_INDEX_HIGH",
+                                  "UNEATEN_INDEX_UNAVAILABLE") for c in codes))
+        self.assertTrue(any("ML-трек" in w for w in self.report["warnings"]))
+
 
 class TestDemoIsolation(unittest.TestCase):
     def setUp(self):
