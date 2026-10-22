@@ -22,6 +22,7 @@
   audit       — хвост журнала аудита
   demo        — изолированное синтетическое демо (DEMO-среда)
   gen-calibrated — откалиброванный SYNTHETIC-генератор v2 (параметры из источников)
+  eval-compare — сравнение фаз BASELINE/INTERVENTION (разведочный анализ)
 
 Отсутствие команды эксплуатации (реальное вмешательство) — намеренное:
 условия перехода в OPERATIONAL не выполнены (см. docs/ARCHITECTURE_AND_GATES.md).
@@ -165,6 +166,22 @@ def cmd_import_open(args) -> int:
                              [i.to_dict() for i in o_rep.warnings]
         _print(report)
         return 0
+    finally:
+        store.close()
+
+
+def cmd_eval_compare(args) -> int:
+    """Сравнение фаз (BASELINE vs INTERVENTION) — репетиция оценки эффекта.
+
+    Разведочный анализ (см. оговорки в выводе): причинность не утверждается.
+    """
+    from sra.evaluation.compare_phases import compare_phases
+    store = EvidenceStore(args.db, args.environment)
+    try:
+        report = compare_phases(store, args.school_id, alpha=args.alpha,
+                                power=args.power)
+        _print(report)
+        return 0 if report["status"] == "OK" else 2
     finally:
         store.close()
 
@@ -589,6 +606,16 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--out-dir", default=None,
                     help="куда писать CSV-копии (по умолчанию рядом с БД)")
     sp.set_defaults(func=cmd_import_open)
+
+    sp = sub.add_parser("eval-compare",
+                        help="сравнение фаз BASELINE/INTERVENTION (разведочный анализ)")
+    sp.add_argument("--db", required=True)
+    sp.add_argument("--environment", choices=sorted(enums.ENVIRONMENTS),
+                    default=enums.ENV_OPEN)
+    sp.add_argument("--school-id", required=True)
+    sp.add_argument("--alpha", type=float, default=0.05)
+    sp.add_argument("--power", type=float, default=0.80)
+    sp.set_defaults(func=cmd_eval_compare)
 
     sp = sub.add_parser("init-db", help="создать хранилище")
     db_args(sp)
