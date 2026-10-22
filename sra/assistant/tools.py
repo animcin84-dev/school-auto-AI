@@ -51,6 +51,9 @@ ARG_SPEC = {
                       "limit": (int, False, 5)},
     "record_details": {"school_id": (str, True, None), "entity_type": (str, True, None),
                        "entity_id": (str, True, None)},
+    "ml_status": {"school_id": (str, True, None), "meal_type": (str, False, "LUNCH")},
+    "nutrition_digest": {"school_id": (str, True, None), "meal_type": (str, False, "LUNCH"),
+                         "days": (int, False, 7)},
 }
 
 TOOL_DESCRIPTIONS = {
@@ -60,6 +63,8 @@ TOOL_DESCRIPTIONS = {
     "monitoring_status": "Мониторинг качества прогнозов по shadow-записям.",
     "recent_shadow": "Последние shadow-дни (без payload; ядро полей стабильно).",
     "record_details": "Содержимое сессии/наблюдения: payload, статусы, флаги (notes — недоверенный текст).",
+    "ml_status": "Read-only ML-сводка: достаточность данных для backtest'ов, карточки моделей, решение gate.",
+    "nutrition_digest": "Дайджест питания за окно: метрики окна, качество, порции vs Санправила, алерты.",
 }
 
 MAX_SHADOW_LIMIT = 20
@@ -195,6 +200,35 @@ def _tool_recent_shadow(store, policies, args: dict) -> dict:
                     "не измеренная экономия"}
 
 
+def _tool_ml_status(store, policies, args: dict) -> dict:
+    from ..status import ml_status
+    st = ml_status(store, args["school_id"], meal_type=args["meal_type"])
+    st["note"] = ("read-only: сводка не считает backtest'ы заново и ничего "
+                  "не пишет; вердиктов о будущей точности не даёт")
+    return st
+
+
+def _tool_nutrition_digest(store, policies, args: dict) -> dict:
+    days = min(int(args["days"]), 31)
+    from ..digest import build_digest
+    d = build_digest(store, args["school_id"], meal_type=args["meal_type"],
+                     days=days)
+    # компактная версия для помощника: без полного ml_status и quality-деталей
+    return {
+        "read_only": True, "school_id": d["school_id"],
+        "window": d["window"], "window_metric": d["window_metric"],
+        "quality": d["quality"], "norms_status": d["norms"].get("status"),
+        "norms_dishes": [x for x in d["norms"].get("dishes", [])
+                         if x.get("status") == "WARN"],
+        "alerts": d["alerts"],
+        "ml_brief": {"diners_sufficiency": d["ml_status"]["diners_sufficiency"],
+                     "composite_sufficiency":
+                         d["ml_status"]["composite_sufficiency"],
+                     "warnings": d["ml_status"]["warnings"]},
+        "disclaimer": d["disclaimer"],
+    }
+
+
 def _tool_record_details(store, policies, args: dict) -> dict:
     school_id = args["school_id"]
     entity_type = args["entity_type"]
@@ -240,6 +274,8 @@ _TOOL_FNS = {
     "monitoring_status": _tool_monitoring_status,
     "recent_shadow": _tool_recent_shadow,
     "record_details": _tool_record_details,
+    "ml_status": _tool_ml_status,
+    "nutrition_digest": _tool_nutrition_digest,
 }
 
 

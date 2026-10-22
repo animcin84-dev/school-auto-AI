@@ -122,3 +122,42 @@ def nutrition_alerts(store, school_id: str, *,
                        "status": "OK", "value_pct": value,
                        "threshold_pct": uneaten_threshold_pct})
     return alerts
+
+
+def alert_fingerprint(alert: dict) -> str:
+    """Отпечаток алерта для дедупликации (AUDIT §C.13).
+
+    Учитывает код, порог и значение, УСЕЧЁННОЕ до целого процента
+    (дробная часть отбрасывается): дрейф в пределах одного процента
+    (15.2 → 15.5) не спамит одним и тем же алертом ежедневно, а смена
+    целочисленного корзина (15.9 → 16.0) или кода алерта — рассылается.
+    Усечение вместо round() устойчиво на границах (.5 без банковских скачков).
+    """
+    parts = [str(alert.get("code")), str(alert.get("threshold_pct"))]
+    v = alert.get("value_pct")
+    parts.append(str(int(float(v))) if v is not None else "-")
+    return "|".join(parts)
+
+
+def diff_alerts(current: list[dict], previous: list[dict] | None) -> dict:
+    """Размечает алерты: какие уже наблюдались в прошлом прогоне.
+
+    Состояние ХРАНИТ ВЫЗЫВАЮЩИЙ (дайджест/монитор read-only и ничего не
+    пишет): передайте список алертов прошлого прогона в previous. Возврат:
+    alerts (с флагом unchanged), to_notify (только новые/изменившиеся),
+    n_new/n_unchanged. UNAVAILABLE-алерты дедуплицируются на общих
+    основаниях: причина та же — повтор не рассылается.
+    """
+    prev_fps = {alert_fingerprint(a) for a in (previous or [])}
+    alerts, to_notify = [], []
+    for a in current:
+        unchanged = alert_fingerprint(a) in prev_fps
+        marked = {**a, "unchanged": unchanged}
+        alerts.append(marked)
+        if not unchanged:
+            to_notify.append(marked)
+    return {"alerts": alerts, "to_notify": to_notify,
+            "n_new": len(to_notify),
+            "n_unchanged": len(alerts) - len(to_notify),
+            "note": ("состояние прошлого прогона хранит вызывающий; "
+                     "значение усекается до целого процента")}

@@ -113,6 +113,50 @@ def data_quality_report(store, school_id: str, *, calendar: dict | None = None) 
                                      "но требует объяснения в notes",
     })
 
+    # 5a. Сверка «Σ блюд = итог дня» (AUDIT §C.12): если в сессии есть и
+    # разбивка по блюдам, и строка-итог (dish_id ALL/TOTAL/ИТОГО), сумма
+    # разбивки обязана совпадать с итогом в допуске. Только ФИКСАЦИЯ:
+    # данные не правятся молча (как ячейка 2025-03-17 в FI).
+    total_ids = {"ALL", "TOTAL", "ИТОГО", "ИТОГ", "SUM"}
+    by_session: dict[str, dict] = {}
+    for o in observations:
+        slot = by_session.setdefault(o.session_id, {"dishes": [], "totals": []})
+        if (o.dish_id or "").upper() in total_ids:
+            slot["totals"].append(o)
+        else:
+            slot["dishes"].append(o)
+    mismatches = []
+    n_compared = 0
+    for sid in sorted(by_session):
+        slot = by_session[sid]
+        if not (slot["dishes"] and slot["totals"]):
+            continue          # только разбивка (LV) или только итог (FI)
+        for tot in slot["totals"]:
+            for field in ("plate_waste_g", "served_mass_g"):
+                t_val = getattr(tot, field)
+                if t_val is None:
+                    continue
+                dish_vals = [getattr(d, field) for d in slot["dishes"]]
+                if any(v is None for v in dish_vals):
+                    continue          # не измеряли часть блюд — сверка неполна
+                dish_sum = sum(dish_vals)
+                n_compared += 1
+                eps = max(1.0, 0.005 * abs(t_val))
+                if abs(dish_sum - t_val) > eps:
+                    mismatches.append({
+                        "session_id": sid, "field": field,
+                        "sum_of_dishes_g": round(dish_sum, 1),
+                        "total_row_g": round(t_val, 1),
+                        "dish": tot.dish_id,
+                    })
+    add("dish_sum_vs_total", len(mismatches) == 0, {
+        "n_comparisons": n_compared,
+        "mismatches": mismatches[:10],
+        "note": "проверка применима, когда есть и разбивка по блюдам, и строка-"
+                "итог; данные только с разбивкой (LV) или только с итогом (FI) "
+                "пропускают её; расхождение — не редакция, а сигнал для ревизии",
+    })
+
     # 5. Сессии в неучебные дни (по ориентировочному календарю).
     off_days = [{"session_id": s.session_id, "date": s.service_date.isoformat(),
                  "reason": chk[1]}

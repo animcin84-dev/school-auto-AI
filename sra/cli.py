@@ -555,6 +555,17 @@ def cmd_digest(args) -> int:
                          uneaten_threshold_pct=args.threshold,
                          age_group=args.age_group)
         d["explanation"] = explain_digest(d)
+        # экспорт для печати (№19): файлы пишет CLI, модуль экспорта чистый
+        if args.out_md:
+            from sra.reportio import digest_to_markdown
+            Path(args.out_md).write_text(digest_to_markdown(d),
+                                         encoding="utf-8")
+            d["export_md"] = args.out_md
+        if args.out_csv:
+            from sra.reportio import digest_norms_csv, digest_window_csv
+            Path(args.out_csv).write_text(
+                digest_window_csv(d) + digest_norms_csv(d), encoding="utf-8")
+            d["export_csv"] = args.out_csv
         _print(d)
         return 0
     finally:
@@ -1001,6 +1012,10 @@ def build_parser() -> argparse.ArgumentParser:
                     help="ширина окна по последней дате сессий")
     sp.add_argument("--threshold", type=float, default=30.0)
     sp.add_argument("--age-group", default="6-11")
+    sp.add_argument("--out-md", default=None,
+                    help="записать дайджест в markdown-файл для печати")
+    sp.add_argument("--out-csv", default=None,
+                    help="записать таблицы окна и норм в CSV (utf-8-sig)")
     sp.set_defaults(func=cmd_digest)
 
     sp = sub.add_parser("rehearse-year",
@@ -1043,6 +1058,9 @@ def build_parser() -> argparse.ArgumentParser:
                     default=enums.ENV_OPEN)
     sp.add_argument("--school-id", required=True)
     sp.add_argument("--threshold", type=float, default=30.0)
+    sp.add_argument("--previous", default=None,
+                    help="JSON прошлых алертов для дедупликации "
+                         "(состояние хранит вызывающий)")
     sp.set_defaults(func=cmd_alerts)
 
     sp = sub.add_parser("eval-compare",
