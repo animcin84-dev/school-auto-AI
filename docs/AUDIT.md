@@ -72,10 +72,18 @@
 
 ## E. НОВЫЙ ПЛАН (заменяет приоритеты ROADMAP после аудита)
 **P0 — архитектурные долги, сейчас (stdlib):**
-- [ ] Миграция 5: `menu_id` в сессиях (контракт, store, все импорты,
-  diners/composite) — проблема №6;
-- [ ] `promotion_gate` — формальное правило принятия модели + запись в
-  model_cards — №8;
+- [x] Миграция 5: `menu_id` в сессиях (контракт, store-payload, все импорты:
+  FI/LV/calibrated/synthetic/csv_map; diners/composite/compare_phases читают
+  поле, notes — fallback) — проблема №6. Проверено e2e: FI 155/155 menu_id,
+  25 уникальных меню; числа diners/composite/eval-compose не изменились
+  (старое поведение по notes-regex и новое по полю дают бит-в-бит одинаковый
+  backtest на FI).
+- [x] `promotion_gate` (sra/promotion.py + CLI `ml-gate`) — формальное правило
+  принятия модели: достаточность данных (окна × тестовые дни >= 30 точек),
+  улучшение MAE >= 5%, стабильность (лучше в >= 2/3 окон), покрытие интервала
+  в [0.60, 0.95]; при PROMOTED — модель-карточка с аудитом критериев,
+  при REJECTED — причины. На FI честно REJECTED (diners: лучший ML-кандидат
+  хуже контрольного menu_history) — №8;
 - [ ] `aggregate` в import-map (порции → сессии дня) — №7;
 - [ ] explain_* для diners/composite/quality/alerts + инструмент `ml_status`
   — №9.

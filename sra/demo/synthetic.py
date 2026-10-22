@@ -32,6 +32,7 @@ MEAL_TYPE = "LUNCH"
 STUDY_PHASE = enums.PHASE_BASELINE
 
 # (dish_id, доля порции в рационе, типичная plate_waste доля до/после смены режима)
+MENU_CYCLE_DAYS = 20  # цикл меню демо (как в calibrated-генераторе)
 DISHES = [
     ("DISH-001-SOUP", 0.30, 0.11, 0.07),
     ("DISH-002-MAIN", 0.45, 0.14, 0.09),
@@ -124,6 +125,7 @@ def generate(out_dir: str | Path, *, seed: int = 42, n_days: int = 60,
             served_meals, censored,
             enums.SYNTHETIC, STUDY_PHASE, source_ref,
             observed_at.isoformat(), recorded_at.isoformat(),
+            str(i % MENU_CYCLE_DAYS),  # menu_id: идентификатор цикла меню
         ])
 
         for dish_id, share, pw_before, pw_after in DISHES:
@@ -172,7 +174,7 @@ def generate(out_dir: str | Path, *, seed: int = 42, n_days: int = 60,
     observations_path = out / "observations.csv"
     with sessions_path.open("w", encoding="utf-8", newline="") as fh:
         w = csv.writer(fh)
-        w.writerow(SESSION_HEADER)
+        w.writerow(SESSION_HEADER + ["menu_id"])
         w.writerows(session_rows)
     with observations_path.open("w", encoding="utf-8", newline="") as fh:
         w = csv.writer(fh)

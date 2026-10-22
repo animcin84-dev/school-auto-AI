@@ -26,7 +26,7 @@ MAP = {
                   "evidence_status": "REAL_OBSERVED",
                   "source_ref": "social-wallet:export:test",
                   "demand_censored": "false", "meals_served": "1",
-                  "attendance_count": "1"},
+                  "attendance_count": "1", "menu_id": "M-07"},
     "derive": {"observed_at": {"date_field": "service_date", "time": "13:30"},
                "recorded_at": {"at_import": True}},
 }
@@ -71,6 +71,7 @@ class TestCsvMap(unittest.TestCase):
         self.assertEqual(s.timezone, "Asia/Almaty")
         self.assertEqual(s.attendance_count, 1)
         self.assertEqual(s.demand_censored, enums.CENSOR_FALSE)
+        self.assertEqual(s.menu_id, "M-07")     # меню константой карты
         # observed_at выведен из даты + 13:30 по зоне школы
         self.assertEqual(s.observed_at.hour, 13)
         self.assertEqual(s.observed_at.minute, 30)

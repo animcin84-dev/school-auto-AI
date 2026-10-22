@@ -141,6 +141,8 @@ def map_workbook(wb: dict, *, school_id: str = SCHOOL_DEFAULT,
             demand_censored=enums.CENSOR_UNKNOWN, evidence_status=enums.REAL_OBSERVED,
             study_phase=phase, source_ref=SOURCE_REF, observed_at=observed,
             recorded_at=recorded,
+            menu_id=(str(menu) if menu is not None and
+                     not isinstance(menu, (str, bool)) else None),
             notes=(f"чужое измерение (Zenodo 20825233, Финляндия); DINERS={diners_int} "
                    f"(едоки за день); MENU={menu} (идентификатор меню, цикл 1–25)")))
         observations.append(ObservationRecord(

@@ -50,6 +50,13 @@ class TestFeatures(unittest.TestCase):
         self.assertEqual(f[1]["f_lag"], 10.0)
         self.assertEqual(f[2]["f_ma5"], 15.0)
 
+    def test_menu_id_field_preferred_over_notes(self):
+        s = _mk_session(0, 100, menu=7)
+        # notes содержат MENU=7; поле должно взять верх при другом значении
+        s.menu_id = "9"
+        pts = build_diners_series([s])
+        self.assertEqual(pts[0].menu, "9")
+
     def test_build_series_skips_empty_and_sorts(self):
         sessions = [_mk_session(2, 100), _mk_session(0, 50),
                     _mk_session(1, 0)]              # ноль едоков → пропуск

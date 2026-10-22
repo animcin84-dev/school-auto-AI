@@ -61,8 +61,8 @@ def compare_phases(store, school_id: str, *, alpha: float = 0.05,
         if pw is None or not diners or diners <= 0:
             continue
         per_diner = pw / diners
-        menu_id = None
-        if s.notes:
+        menu_id = getattr(s, "menu_id", None)
+        if not menu_id and s.notes:
             m = _MENU_RE.search(s.notes)
             if m:
                 menu_id = m.group(1)

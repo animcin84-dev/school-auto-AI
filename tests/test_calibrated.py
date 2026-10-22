@@ -34,6 +34,12 @@ class TestCalibratedGenerator(unittest.TestCase):
     def tearDownClass(cls):
         shutil.rmtree(cls.tmp, ignore_errors=True)
 
+    def test_menu_id_column_parsed(self):
+        ids = {r.menu_id for r in
+               (parse_file(self.tmp / "a" / "sessions.csv", "sessions"))}
+        self.assertFalse({None} & ids)          # колонка заполнена
+        self.assertTrue(all(str(x).isdigit() for x in ids))
+
     def test_determinism(self):
         for name in ("sessions.csv", "observations.csv", "manifest.json"):
             self.assertEqual((self.tmp / "a" / name).read_bytes(),

@@ -27,13 +27,17 @@ def expected_header(kind: str) -> list[str]:
 
 
 def check_header(header: list[str], kind: str) -> None:
-    """Строгая проверка заголовка: точное соответствие шаблону (+ опционально notes)."""
+    """Строгая проверка заголовка: канонический шаблон + опциональные поля
+    (SESSION: notes, menu_id; OBSERVATION: notes) в любом порядке после
+    обязательных. Прочие лишние колонки отклоняются."""
     base = expected_header(kind)
     if header == base:
         return
-    if header == base + ["notes"]:
+    optional = (list(contracts.SESSION_OPTIONAL_FIELDS) if kind == "sessions"
+                else list(contracts.OBSERVATION_OPTIONAL_FIELDS))
+    if set(base) <= set(header) and set(header) - set(base) <= set(optional):
         return
-    extra = [c for c in header if c not in base + ["notes"]]
+    extra = [c for c in header if c not in base + optional]
     missing = [c for c in base if c not in header]
     order_bad = extra == [] and missing == []
     raise ValidationError(

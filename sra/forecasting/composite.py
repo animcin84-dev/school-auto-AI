@@ -59,8 +59,9 @@ def build_daily_points(sessions, observations, *, field: str = "plate_waste_g",
         diners = s.attendance_count if s.attendance_count is not None else s.meals_served
         if not mass or not diners or diners <= 0:
             continue  # точка непригодна для обоих подходов (честно пропускается)
+        menu = getattr(s, "menu_id", None) or menu_fn(s)
         pts.append(DayPoint(date=s.service_date, weekday=s.service_date.weekday(),
-                            menu=menu_fn(s), mass=float(mass), diners=float(diners)))
+                            menu=menu, mass=float(mass), diners=float(diners)))
     pts.sort(key=lambda p: p.date)
     return pts
 
@@ -187,6 +188,7 @@ def backtest_composite(sessions, observations, *, field: str = "plate_waste_g",
         models.append({
             "name": m, "status": "OK",
             "mae_mean": sum(r["mae"] for r in ok) / len(ok),
+            "mae_per_origin": [r["mae"] for r in ok],
             "dec_cost_kzt_mean": sum(r["dec_cost_kzt"] for r in ok) / len(ok),
             "coverage_mean": sum(r["coverage"] for r in ok) / len(ok),
             "n_windows": len(ok), "n_test_per_window": ok[0]["n_test"],

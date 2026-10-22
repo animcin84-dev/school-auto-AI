@@ -58,9 +58,10 @@ def build_diners_series(sessions, *, menu_fn=None) -> list[DinersPoint]:
         y = s.attendance_count if s.attendance_count is not None else s.meals_served
         if y is None or y <= 0:
             continue
+        menu = getattr(s, "menu_id", None) or menu_fn(s)  # поле; notes — fallback
         pts.append(DinersPoint(session_id=s.session_id, date=s.service_date,
                                weekday=s.service_date.weekday(),
-                               menu=menu_fn(s), y=float(y)))
+                               menu=menu, y=float(y)))
     pts.sort(key=lambda p: p.date)
     return pts
 

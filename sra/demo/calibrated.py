@@ -176,7 +176,7 @@ def generate(out_dir: str | Path, *, seed: int = 2026, n_days: int = 90,
             "" if attendance is None else attendance,
             "" if requested is None else requested, served_meals, censored,
             enums.SYNTHETIC, enums.PHASE_BASELINE, source_ref,
-            observed_at.isoformat(), recorded_at.isoformat(),
+            observed_at.isoformat(), recorded_at.isoformat(), str(menu_id),
         ])
         # Эффект режима после mode_change_day: сниженные отходы тарелок (демо-сценарий).
         plate_factor = 0.75 if i >= mode_change_day else 1.0
@@ -221,8 +221,9 @@ def generate(out_dir: str | Path, *, seed: int = 2026, n_days: int = 90,
                 child_plate_total += plate_waste
         total_plate_per_child.append(child_plate_total / max(served_meals, 1))
 
+    sessions_header = SESSION_HEADER + ["menu_id"]
     (out / "sessions.csv").write_text(
-        "\n".join([",".join(SESSION_HEADER)] +
+        "\n".join([",".join(sessions_header)] +
                   [",".join(str(x) for x in r) for r in session_rows]) + "\n",
         encoding="utf-8")
     (out / "observations.csv").write_text(

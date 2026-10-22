@@ -68,6 +68,7 @@ _FIELD_PARSERS = {
                                                     field_name="avoidability_status",
                                                     row_number=rn,
                                                     empty=enums.AV_UNCLASSIFIED),
+    "menu_id": lambda v, rn: (str(v).strip()[:24] or None),
     "observed_at": lambda v, rn: parse_datetime_offset(v, field_name="observed_at",
                                                        row_number=rn),
     "recorded_at": lambda v, rn: parse_datetime_offset(v, field_name="recorded_at",
@@ -204,6 +205,7 @@ def parse_csv(path, m: dict) -> tuple[list, dict]:
                         evidence_status=_FIELD_PARSERS["evidence_status"](vals.get("evidence_status", ""), rn),
                         study_phase=(_FIELD_PARSERS["study_phase"](vals["study_phase"], rn)
                                      if vals.get("study_phase") not in (None, "") else None),
+                        menu_id=(vals.get("menu_id") or None),
                         source_ref=_FIELD_PARSERS["source_ref"](vals.get("source_ref", ""), rn),
                         observed_at=_FIELD_PARSERS["observed_at"](vals.get("observed_at", ""), rn),
                         recorded_at=_FIELD_PARSERS["recorded_at"](vals.get("recorded_at", ""), rn))

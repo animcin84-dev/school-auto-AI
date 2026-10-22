@@ -222,6 +222,7 @@ class TestFinlandAdapter(OpenDataTestBase):
         self.assertEqual(s.demand_censored, enums.CENSOR_UNKNOWN)
         self.assertEqual(s.study_phase, enums.PHASE_BASELINE)
         self.assertIn("MENU=1", s.notes)
+        self.assertEqual(s.menu_id, "1")        # поле, не только notes
         o = m["observations"][0]
         self.assertEqual(o.dish_id, "ALL")
         self.assertAlmostEqual(o.plate_waste_g, 5500.0)  # взято из PW g

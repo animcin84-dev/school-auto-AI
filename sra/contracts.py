@@ -28,7 +28,7 @@ SESSION_FIELDS = (
     "attendance_count", "meals_requested", "meals_served", "demand_censored",
     "evidence_status", "study_phase", "source_ref", "observed_at", "recorded_at",
 )
-SESSION_OPTIONAL_FIELDS = ("notes",)
+SESSION_OPTIONAL_FIELDS = ("notes", "menu_id")
 
 OBSERVATION_FIELDS = (
     "observation_id", "session_id", "dish_id",
@@ -190,6 +190,7 @@ class SessionRecord:
     source_ref: str
     observed_at: datetime
     recorded_at: datetime
+    menu_id: str | None = None  # идентификатор меню (первоклассный признак прогноза)
     notes: str | None = None
     quality_flags: list[str] = field(default_factory=list)
     row_number: int = 0
@@ -216,6 +217,7 @@ class SessionRecord:
             "source_ref": self.source_ref,
             "observed_at": self.observed_at.isoformat(),
             "recorded_at": self.recorded_at.isoformat(),
+            "menu_id": self.menu_id,
             "notes": self.notes,
             "unit_declared": self.unit_declared,
         }
@@ -237,6 +239,7 @@ class SessionRecord:
             source_ref=p["source_ref"],
             observed_at=datetime.fromisoformat(p["observed_at"]),
             recorded_at=datetime.fromisoformat(p["recorded_at"]),
+            menu_id=p.get("menu_id"),
             notes=p.get("notes"),
             quality_flags=list(quality_flags or []),
         )
@@ -342,6 +345,7 @@ def parse_session_row(row: dict, *, row_number: int, unit: str = CANONICAL_UNIT)
         source_ref=require_nonempty(g("source_ref"), field_name="source_ref", row_number=row_number),
         observed_at=parse_datetime_offset(g("observed_at"), field_name="observed_at", row_number=row_number),
         recorded_at=parse_datetime_offset(g("recorded_at"), field_name="recorded_at", row_number=row_number),
+        menu_id=(g("menu_id").strip()[:24] or None),
         notes=(row.get("notes") or "").strip() or None,
         row_number=row_number,
         unit_declared=unit,

@@ -439,6 +439,73 @@ def cmd_decide(args) -> int:
         store.close()
 
 
+def cmd_ml_gate(args) -> int:
+    """Promotion gate: формальное правило принятия модели + карточка решения.
+
+    Кандидат — лучшая модель отчёта backtest'а (кроме контрольных правил);
+    действующая — контрольная модель (для diners: menu_history; для composite:
+    лучший прямой прогноз). При PROMOTED пишется модель-карточка с аудитом
+    критериев; при REJECTED — только вердикт с причинами.
+    """
+    from sra.promotion import GatePolicy, gate_from_report, VERDICT_PROMOTED
+    store = EvidenceStore(args.db, args.environment)
+    try:
+        gate = GatePolicy(min_improvement_pct=args.min_improvement,
+                          min_origins=args.min_origins, min_points=args.min_points)
+        sessions = [s for s in store.fetch_sessions(school_id=args.school_id)
+                    if s.meal_type == args.meal_type]
+        if args.target == "diners":
+            from sra.forecasting.diners import backtest_diners
+            report = backtest_diners(sessions, test_days=args.test_days,
+                                     calib_days=args.calib_days)
+            result = gate_from_report(
+                report, incumbent_name="menu_history",
+                candidate_skip={"menu_history", "moving_average5", "weekday3"},
+                gate=gate)
+        else:
+            from sra.forecasting.composite import backtest_composite
+            observations = store.fetch_observations(school_id=args.school_id)
+            report = backtest_composite(sessions, observations, field=args.field,
+                                        test_days=args.test_days,
+                                        calib_days=args.calib_days,
+                                        c_w=args.c_w, c_s=args.c_s)
+            if report.get("status") != "OK":
+                result = {"verdict": "REJECTED",
+                          "reasons": [f"backtest: {report.get('status')}"],
+                          "gate": gate.to_dict(), "criteria": [], "numbers": {}}
+            else:
+                report.setdefault("evaluation",
+                                  {"n_origins": report.get("n_origins"),
+                                   "test_days": report.get("test_days")})
+                vd = report["verdict"]
+                result = gate_from_report(
+                    report, incumbent_name=vd["direct_best"],
+                    candidate_skip={"direct_ma5", "direct_weekday3",
+                                    "direct_menu_hist"}, gate=gate)
+        result["target"] = args.target
+        result["school_id"] = args.school_id
+        result["dataset_version"] = store.get_dataset_version()
+        if (result["verdict"] == VERDICT_PROMOTED and not args.dry_run):
+            nums = result.get("numbers", {})
+            card = store.save_model_card(
+                model_id=f"sra.promotion.{args.target}",
+                model_name=nums.get("candidate", "unknown"),
+                params={"gate": result["gate"],
+                        "incumbent": nums.get("incumbent"),
+                        "criteria": result["criteria"]},
+                data_meta={"school_id": args.school_id,
+                           "meal_type": args.meal_type,
+                           "target": args.target,
+                           "report_meta": result.get("report_meta"),
+                           "dataset_version": store.get_dataset_version()},
+                metrics=result["numbers"], actor=args.actor)
+            result["model_card"] = card
+        _print(result)
+        return 0 if result["verdict"] == VERDICT_PROMOTED else 2
+    finally:
+        store.close()
+
+
 def cmd_forecast(args) -> int:
     from sra.forecasting.backtest import run_backtest
     from sra.forecasting.series import make_snapshot_fn
@@ -788,6 +855,28 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--c-w", type=float, default=500.0)
     sp.add_argument("--c-s", type=float, default=5000.0)
     sp.set_defaults(func=cmd_forecast_composite)
+    sp = sub.add_parser("ml-gate",
+                        help="promotion gate: формальное правило принятия модели "
+                             "(кандидат vs действующая) + карточка решения")
+    sp.add_argument("--db", required=True)
+    sp.add_argument("--environment", choices=sorted(enums.ENVIRONMENTS),
+                    default=enums.ENV_OPEN)
+    sp.add_argument("--school-id", required=True)
+    sp.add_argument("--meal-type", default="LUNCH")
+    sp.add_argument("--target", choices=["diners", "composite"], default="diners")
+    sp.add_argument("--field", choices=["plate_waste_g", "served_mass_g"],
+                    default="plate_waste_g")
+    sp.add_argument("--test-days", type=int, default=30)
+    sp.add_argument("--calib-days", type=int, default=30)
+    sp.add_argument("--c-w", type=float, default=500.0)
+    sp.add_argument("--c-s", type=float, default=5000.0)
+    sp.add_argument("--min-improvement", type=float, default=5.0,
+                    help="минимальное улучшение MAE, %% (по умолчанию 5)")
+    sp.add_argument("--min-origins", type=int, default=3)
+    sp.add_argument("--min-points", type=int, default=30)
+    sp.add_argument("--dry-run", action="store_true",
+                    help="только вердикт, карточку не писать")
+    sp.set_defaults(func=cmd_ml_gate)
 
     sp = sub.add_parser("import-map",
                         help="импорт CSV по карте колонок (JSON) — универсальный "
