@@ -33,6 +33,14 @@ from ..contracts import (
     parse_enum, parse_mass, parse_optional_int, parse_timezone, require_nonempty)
 from ..errors import ValidationError
 
+# Поля, обязательные в aggregate-режиме (порция в строке -> сессия дня):
+# session_id/attendance_count/meals_served вычисляются при агрегации.
+REQUIRED_AGG = ("school_id", "service_date", "meal_type", "timezone",
+                "evidence_status", "source_ref", "observed_at", "recorded_at")
+# поля уровня группы: значения всех строк группы обязаны совпадать
+_GROUP_CONSISTENT = ("evidence_status", "timezone", "source_ref",
+                     "demand_censored", "study_phase", "menu_id")
+
 REQUIRED = {
     "sessions": ("session_id", "school_id", "service_date", "timezone",
                  "meal_type", "evidence_status", "source_ref", "observed_at",
@@ -90,6 +98,17 @@ def load_map(path) -> dict:
     if kind not in REQUIRED:
         raise ValidationError(f"map.kind: sessions|observations, получено {kind!r}",
                               code="E_BAD_KIND")
+    agg = (m.get("options") or {}).get("aggregate")
+    if agg is not None:
+        if kind != "sessions":
+            raise ValidationError("options.aggregate допустим только для "
+                                  "kind=sessions (агрегация порций в сессию дня)",
+                                  code="E_AGGREGATE_CONFLICT")
+        if not isinstance(agg, dict) or set(agg) - {"pupil_column"}:
+            raise ValidationError('options.aggregate: допустимый ключ — '
+                                  '"pupil_column" (колонка с идентификатором '
+                                  "ученика для distinct-посещаемости)",
+                                  code="E_BAD_MAP_FIELD")
     columns = m.get("columns") or {}
     constants = m.get("constants") or {}
     unknown = [f for f in list(columns) + list(constants) if f not in KNOWN_FIELDS]
@@ -97,7 +116,8 @@ def load_map(path) -> dict:
         raise ValidationError(f"карта содержит неизвестные поля: {sorted(unknown)}; "
                               f"допустимо: {sorted(KNOWN_FIELDS)}",
                               code="E_BAD_MAP_FIELD")
-    missing = [f for f in REQUIRED[kind]
+    required = REQUIRED_AGG if agg is not None else REQUIRED[kind]
+    missing = [f for f in required
                if f not in columns and f not in constants]
     overlap = sorted(set(columns) & set(constants))
     if overlap:
@@ -128,11 +148,169 @@ def load_map(path) -> dict:
     if set(derive) & set(columns) or set(derive) & set(constants):
         raise ValidationError("поле задано дважды (derive + колонка/константа)",
                               code="E_MAP_CONFLICT")
+    if agg is not None and "recorded_at" in columns:
+        raise ValidationError("aggregate: recorded_at не может быть колонкой строк "
+                              '(используйте derive {"recorded_at": {"at_import": true}} '
+                              "или константу)",
+                              code="E_AGGREGATE_CONFLICT")
     return m
+
+
+def _parse_csv_aggregate(path, m: dict, agg: dict) -> tuple[list, dict]:
+    """Aggregate-режим: одна строка CSV = одна ВЫДАННАЯ ПОРЦИЯ (например,
+    подтверждение «Социального кошелька»); строки группы
+    (school_id, service_date, meal_type) сворачиваются в ОДНУ сессию дня:
+
+    - meals_served = число строк группы (порций);
+    - attendance_count = число УНИКАЛЬНЫХ учеников (distinct pupil_column),
+      если pupil_column задан, иначе None (посещаемость не выдумываем);
+    - session_id детерминирован: SES-<школа>-<дата>-<ПРИЁМ>;
+    - поля уровня группы (evidence_status, timezone, source_ref,
+      demand_censored, study_phase, menu_id) обязаны совпадать во всех
+      строках группы — расхождение = ошибка строки (батч атомарен);
+    - observed_at: при разных значениях в группе берётся минимум
+      (раньший момент) с предупреждением W_AGG_OBSERVED_MIN.
+
+    Инвариант сохраняется: посещаемость (ученики) != спрос (порции);
+    цензурирование demand_censored приходит только из карты, не выдумывается.
+    """
+    columns = m["columns"]
+    constants = m["constants"]
+    derive = m.get("derive") or {}
+    import_now = datetime.now(timezone.utc)
+    pupil_column = agg.get("pupil_column")
+    errors: list[dict] = []
+    warnings: list[dict] = []
+    delimiter = (m.get("options") or {}).get("delimiter", ",")
+    if len(delimiter) != 1:
+        raise ValidationError("options.delimiter должен быть одним символом",
+                              code="E_BAD_MAP_FIELD")
+    groups: dict[tuple, dict] = {}
+    n_rows = 0
+    with open(path, newline="", encoding="utf-8-sig") as fh:
+        reader = csv.DictReader(fh, delimiter=delimiter)
+        if reader.fieldnames is None:
+            raise ValidationError("CSV пуст (нет заголовка)", code="E_NO_DATA_ROWS")
+        headers = {h.strip() for h in reader.fieldnames}
+        for field, col in columns.items():
+            if col not in headers:
+                raise ValidationError(f"колонка {col!r} (для {field}) отсутствует "
+                                      f"в файле; есть: {sorted(headers)}",
+                                      code="E_COLUMN_NOT_FOUND")
+        if pupil_column and pupil_column not in headers:
+            raise ValidationError(f"колонка {pupil_column!r} (pupil_column) "
+                                  f"отсутствует в файле; есть: {sorted(headers)}",
+                                  code="E_COLUMN_NOT_FOUND")
+        for rn, row in enumerate(reader, start=2):
+            n_rows += 1
+            vals = {}
+            for field in KNOWN_FIELDS & set(columns):
+                raw = row.get(columns[field])
+                vals[field] = raw if raw is not None else ""
+            for field, v in constants.items():
+                vals[field] = v
+            vals.setdefault("demand_censored", enums.CENSOR_UNKNOWN)
+            if "observed_at" in derive:
+                spec = derive["observed_at"]
+                try:
+                    tz_name = vals.get("timezone") or "UTC"
+                    d_val = vals.get(spec["date_field"], "")
+                    hh, mm = str(spec["time"]).split(":")
+                    vals["observed_at"] = datetime(
+                        *parse_date_str(d_val, field_name=spec["date_field"],
+                                        row_number=rn).timetuple()[:3],
+                        int(hh), int(mm), tzinfo=ZoneInfo(tz_name)).isoformat()
+                except Exception as e:
+                    errors.append({"row": rn, "code": "E_DERIVE_FAILED",
+                                   "message": f"observed_at: {e}"})
+                    continue
+            if derive.get("recorded_at", {}).get("at_import"):
+                vals["recorded_at"] = import_now.isoformat()
+            try:
+                parsed = {
+                    "school_id": _FIELD_PARSERS["school_id"](vals.get("school_id", ""), rn),
+                    "service_date": _FIELD_PARSERS["service_date"](vals.get("service_date", ""), rn),
+                    "meal_type": _FIELD_PARSERS["meal_type"](vals.get("meal_type", ""), rn),
+                    "timezone": _FIELD_PARSERS["timezone"](vals.get("timezone", ""), rn),
+                    "evidence_status": _FIELD_PARSERS["evidence_status"](vals.get("evidence_status", ""), rn),
+                    "source_ref": _FIELD_PARSERS["source_ref"](vals.get("source_ref", ""), rn),
+                    "observed_at": _FIELD_PARSERS["observed_at"](vals.get("observed_at", ""), rn),
+                    "recorded_at": _FIELD_PARSERS["recorded_at"](vals.get("recorded_at", ""), rn),
+                    "demand_censored": _FIELD_PARSERS["demand_censored"](vals.get("demand_censored", ""), rn),
+                    "study_phase": (_FIELD_PARSERS["study_phase"](vals["study_phase"], rn)
+                                    if vals.get("study_phase") not in (None, "") else None),
+                    "menu_id": (str(vals.get("menu_id")).strip()[:24] or None)
+                    if vals.get("menu_id") not in (None, "") else None,
+                    "pupil": (row.get(pupil_column) or "").strip()
+                    if pupil_column else "",
+                }
+            except ValidationError as e:
+                errors.append({"row": rn, "code": e.code, "message": str(e)})
+                continue
+            key = (parsed["school_id"], parsed["service_date"],
+                   parsed["meal_type"].upper())
+            g = groups.get(key)
+            if g is None:
+                g = groups[key] = {**{k: v for k, v in parsed.items()
+                                      if k != "pupil"},
+                                   "rows": 0, "pupils": set(),
+                                   "row_nums": []}
+            for f in _GROUP_CONSISTENT:
+                if parsed[f] != g[f]:
+                    errors.append({
+                        "row": rn, "code": "E_AGG_CONFLICT_VALUE",
+                        "message": (f"поле {f} различается внутри группы "
+                                    f"{key[0]}/{key[1].isoformat()}/{key[2]}: "
+                                    f"{parsed[f]!r} против {g[f]!r} (строка "
+                                    f"{g['row_nums'][0]})")})
+            g["rows"] += 1
+            if parsed["pupil"]:
+                g["pupils"].add(parsed["pupil"])
+            if parsed["observed_at"] < g["observed_at"]:
+                g["observed_at"] = parsed["observed_at"]
+                g["observed_min_mixed"] = True
+            g["row_nums"].append(rn)
+    if errors:
+        return [], {"kind": "sessions-aggregate", "rows_total": n_rows,
+                    "rows_parsed": 0, "sessions_built": 0,
+                    "warnings": warnings, "errors": errors[:50],
+                    "errors_total": len(errors),
+                    "note": "батч атомарен: при наличии ошибок импорт не выполняется"}
+    records = []
+    for key, g in groups.items():
+        if g.get("observed_min_mixed"):
+            warnings.append({
+                "code": "W_AGG_OBSERVED_MIN",
+                "message": (f"группа {key[0]}/{key[1].isoformat()}/{key[2]}: "
+                            "observed_at строк различается — взят минимальный "
+                            f"момент ({g['observed_at'].isoformat()})")})
+        records.append(SessionRecord(
+            session_id=f"SES-{key[0]}-{key[1].isoformat()}-{key[2]}",
+            school_id=key[0], service_date=key[1], timezone=g["timezone"],
+            meal_type=key[2],
+            attendance_count=(len(g["pupils"]) if pupil_column and g["pupils"]
+                              else None),
+            meals_requested=None, meals_served=g["rows"],
+            demand_censored=g["demand_censored"],
+            evidence_status=g["evidence_status"], study_phase=g["study_phase"],
+            menu_id=g["menu_id"], source_ref=g["source_ref"],
+            observed_at=g["observed_at"], recorded_at=g["recorded_at"]))
+    report = {"kind": "sessions-aggregate", "rows_total": n_rows,
+              "rows_parsed": n_rows, "sessions_built": len(records),
+              "warnings": warnings, "errors": [], "errors_total": 0,
+              "attendance_semantics": ("distinct pupil_column" if pupil_column
+                                       else "pupil_column не задан -> None"),
+              "note": ("одна строка = одна порция; группы (школа, дата, приём) "
+                       "-> сессия дня; meals_served = строк, attendance = "
+                       "уникальные ученики")}
+    return records, report
 
 
 def parse_csv(path, m: dict) -> tuple[list, dict]:
     """Читает CSV по карте → (записи, отчёт). Ошибки собираются, батч атомарен."""
+    agg = (m.get("options") or {}).get("aggregate")
+    if agg is not None:
+        return _parse_csv_aggregate(path, m, agg)
     kind = m["kind"]
     columns = m["columns"]
     constants = m["constants"]

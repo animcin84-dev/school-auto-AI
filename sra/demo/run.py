@@ -217,6 +217,8 @@ def run_demo(out_dir: str | Path = "data/demo", *, seed: int = 42, n_days: int =
     # любые MAE/интервалы на SYNTHETIC-данных проверяют код, не реальную ценность.
     from ..forecasting.composite import backtest_composite
     from ..forecasting.diners import backtest_diners
+    from ..explain import (explain_alerts, explain_composite_backtest,
+                           explain_diners_backtest)
     from ..monitoring import nutrition_alerts
     demo_sessions = [s for s in store.fetch_sessions(school_id=school)
                      if s.meal_type == "LUNCH"]
@@ -224,6 +226,7 @@ def run_demo(out_dir: str | Path = "data/demo", *, seed: int = 42, n_days: int =
     composite_bt = backtest_composite(
         demo_sessions, store.fetch_observations(school_id=school),
         field="served_mass_g", test_days=10, calib_days=10)
+    ml_alerts = nutrition_alerts(store, school)
     ml_track = {
         "data_nature": enums.SYNTHETIC,
         "note": ("ML на синтетике = проверка механики (причинные признаки, "
@@ -236,7 +239,12 @@ def run_demo(out_dir: str | Path = "data/demo", *, seed: int = 42, n_days: int =
                                "verdict": composite_bt.get("verdict"),
                                "best_by_decision_cost":
                                    composite_bt.get("best_by_decision_cost")},
-        "nutrition_alerts": nutrition_alerts(store, school),
+        "nutrition_alerts": ml_alerts,
+        "explanations": {
+            "diners": explain_diners_backtest(diners_bt),
+            "composite": explain_composite_backtest(composite_bt),
+            "alerts": explain_alerts(ml_alerts),
+        },
     }
 
     # 8. Самопроверка инвариантов хранилища.

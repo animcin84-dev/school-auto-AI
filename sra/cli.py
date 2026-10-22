@@ -506,6 +506,20 @@ def cmd_ml_gate(args) -> int:
         store.close()
 
 
+def cmd_ml_status(args) -> int:
+    """Read-only сводка ML-состояния: данные, достаточность, карточки, gate."""
+    from sra.explain import explain_ml_status
+    from sra.status import ml_status
+    store = EvidenceStore(args.db, args.environment)
+    try:
+        st = ml_status(store, args.school_id, meal_type=args.meal_type)
+        st["explanation"] = explain_ml_status(st)
+        _print(st)
+        return 0
+    finally:
+        store.close()
+
+
 def cmd_forecast(args) -> int:
     from sra.forecasting.backtest import run_backtest
     from sra.forecasting.series import make_snapshot_fn
@@ -795,7 +809,8 @@ def cmd_demo(args) -> int:
         "explanation_first_line": (report.get("explanation", "").splitlines() or [""])[0],
         "ml_track": {k: report["ml_track"][k]
                      for k in ("data_nature", "note", "diners_backtest",
-                               "composite_backtest", "nutrition_alerts")
+                               "composite_backtest", "nutrition_alerts",
+                               "explanations")
                      if k in report.get("ml_track", {})},
         "explanation_lines": len(report.get("explanation", "").splitlines()),
         "selfcheck_ok": all(r["ok"] for r in report["selfcheck"]),
@@ -877,6 +892,16 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--dry-run", action="store_true",
                     help="только вердикт, карточку не писать")
     sp.set_defaults(func=cmd_ml_gate)
+    sp = sub.add_parser("ml-status",
+                        help="read-only сводка ML-состояния: данные, "
+                             "достаточность для backtest'ов, карточки моделей, "
+                             "последнее решение gate")
+    sp.add_argument("--db", required=True)
+    sp.add_argument("--environment", choices=sorted(enums.ENVIRONMENTS),
+                    default=enums.ENV_OPEN)
+    sp.add_argument("--school-id", required=True)
+    sp.add_argument("--meal-type", default="LUNCH")
+    sp.set_defaults(func=cmd_ml_status)
 
     sp = sub.add_parser("import-map",
                         help="импорт CSV по карте колонок (JSON) — универсальный "

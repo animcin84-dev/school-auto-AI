@@ -241,6 +241,160 @@ def explain_plan(plan: dict) -> str:
     ])
 
 
+def explain_diners_backtest(report: dict) -> str:
+    """Человекочитаемое объяснение отчёта backtest_diners."""
+    if report.get("status") != "OK":
+        return (f"=== Прогноз едоков ===\nСтатус: {report.get('status')}. "
+                f"{report.get('reason', '')}. Число не подставляется без данных.")
+    ev = report.get("evaluation", {})
+    lines = ["=== Прогноз едоков (rolling-origin backtest) ===",
+             f"Схема: {ev.get('scheme')} — окон {ev.get('n_origins')}, "
+             f"тестовых дней на окно {ev.get('test_days')}; точки "
+             f"{report.get('first_test_date')}…{report.get('last_test_date')}."]
+    for m in report.get("models", []):
+        if m.get("status") != "OK":
+            lines.append(f"- {m.get('name')}: недоступна ({m.get('reason')})")
+            continue
+        lines.append(f"- {m.get('name')}: MAE {_fmt_num(m.get('mae_mean'))} едоков "
+                     f"(±{_fmt_num(m.get('mae_spread'))} между окнами)")
+        iv = m.get("intervals") or {}
+        if iv:
+            best = min(iv.items(),
+                       key=lambda kv: abs(kv[1].get("coverage", 0) - 0.8),
+                       default=None)
+            if best:
+                lines.append(f"  интервалы: {best[0]} — покрытие "
+                             f"{_fmt_num(best[1].get('coverage'), 2)}, "
+                             f"ширина {_fmt_num(best[1].get('mean_width'))}")
+    best = report.get("best_model")
+    if best:
+        lines.append(f"Лучшая по MAE: {best}. Это измерение на данных, "
+                     "не гарантия будущей точности.")
+    if report.get("ml_gate") is not None:
+        lines.append("Ворота принятия: см. ml-gate (формальные критерии).")
+    return "\n".join(lines)
+
+
+def explain_composite_backtest(report: dict) -> str:
+    """Человекочитаемое объяснение отчёта backtest_composite."""
+    if report.get("status") != "OK":
+        return (f"=== Композит vs прямой ===\nСтатус: {report.get('status')}. "
+                f"{report.get('reason', '')}")
+    dp = report.get("decision_params", {})
+    lines = ["=== Композит (едоки × г/едока) vs прямой прогноз массы ===",
+             f"Поле: {report.get('field')}; окон {report.get('n_origins')}, "
+             f"тестовых дней {report.get('test_days')}; точки "
+             f"{report.get('first_test_date')}…{report.get('last_test_date')}.",
+             f"Стоимость решения: P* = прогноз + квантиль "
+             f"{_fmt_num(dp.get('tau_newsvendor'), 3)} остатков "
+             f"(c_w={dp.get('c_w')}, c_s={dp.get('c_s')}); cost — тыс.KZT_DEMO/день."]
+    for m in report.get("models", []):
+        if m.get("status") != "OK":
+            continue
+        lines.append(f"- {m.get('name')}: MAE {_fmt_num(m.get('mae_mean'))} г, "
+                     f"cost {_fmt_num(m.get('dec_cost_kzt_mean'), 1)}, "
+                     f"покрытие {_fmt_num(m.get('coverage_mean'), 2)}")
+    v = report.get("verdict") or {}
+    if v:
+        lines.append(f"Вердикт: по MAE {v.get('composite_best')} против "
+                     f"{v.get('direct_best')} — {v.get('note')} "
+                     f"({_fmt_num(v.get('composite_vs_direct_mae_pct'), 2)}%). "
+                     "Ранжировка по стоимости решения может отличаться — это "
+                     "оценочная форма decision-focused подхода.")
+    lines.append("Выводы на открытых данных не переносятся на школу КЗ.")
+    return "\n".join(lines)
+
+
+def explain_quality(report: dict) -> str:
+    """Человекочитаемое объяснение отчёта качества данных."""
+    if report.get("status") == "DATA_NOT_READY":
+        return (f"=== Качество данных ===\n{report.get('reason')}")
+    lines = ["=== Качество данных ==="]
+    for c in report.get("checks", []):
+        mark = "OK" if c.get("ok") else "ПРОБЛЕМА"
+        lines.append(f"- {c.get('name')}: {mark}. {c.get('message', '')}")
+        det = c.get("details") or {}
+        if det.get("note"):
+            lines.append(f"  примечание: {det['note']}")
+    xc = report.get("source_crosscheck")
+    if xc:
+        if xc.get("status") == "OK":
+            lines.append(f"Кросс-чек с источником: {xc.get('rows_checked')} строк, "
+                         f"расхождений {len(xc.get('mismatches', []))}.")
+        else:
+            lines.append(f"Кросс-чек: {xc.get('status')} — {xc.get('reason', '')}")
+    return "\n".join(lines)
+
+
+def explain_alerts(alerts: list) -> str:
+    """Человекочитаемое объяснение списка алертов питания."""
+    if not alerts:
+        return "=== Алерты питания ===\nАлертов нет."
+    lines = ["=== Алерты питания ==="]
+    for a in alerts:
+        head = f"[{a.get('severity')}] {a.get('code')}"
+        if a.get("status") == "OK" and a.get("value_pct") is not None:
+            head += (f": {_fmt_num(a['value_pct'])}% при пороге "
+                     f"{a.get('threshold_pct')}%")
+        lines.append(f"- {head}.")
+        for k in ("reason", "note"):
+            if a.get(k):
+                lines.append(f"  {k}: {a[k]}")
+    lines.append("Решение о пересмотре меню — за бракеражной комиссией школы; "
+                 "система только сигнализирует.")
+    return "\n".join(lines)
+
+
+def explain_promotion(result: dict) -> str:
+    """Человекочитаемое объяснение вердикта promotion gate."""
+    v = result.get("verdict")
+    nums = result.get("numbers", {})
+    head = (f"=== Promotion gate ({result.get('target', '?')}) ===\n"
+            f"Вердикт: {v}. Кандидат {nums.get('candidate')} против "
+            f"действующей {nums.get('incumbent')}.")
+    if v == "PROMOTED":
+        lines = [head,
+                 f"Улучшение MAE {_fmt_num(nums.get('improvement_pct'), 2)}% — "
+                 "все формальные критерии выполнены; решение зафиксировано в "
+                 "модели-карточке."]
+    else:
+        lines = [head] + [f"Причина: {r}" for r in result.get("reasons", [])]
+    lines.append("Гейт оценивает готовность МОДЕЛИ, а не разрешение на "
+                 "действия; исполнение — только через одобрение версии.")
+    return "\n".join(lines)
+
+
+def explain_ml_status(status: dict) -> str:
+    """Человекочитаемое объяснение ml-status (read-only сводка)."""
+    lines = [f"=== ML-статус ({status.get('school_id')}, "
+             f"{status.get('meal_type')}) ===",
+             f"Среда: {status.get('environment')}; dataset_version "
+             f"{status.get('dataset_version')}; сессий {status.get('sessions')} "
+             f"(с menu_id: {status.get('sessions_with_menu_id')}), наблюдений "
+             f"{status.get('observations')}.",
+             f"Достаточность для diners (окна 3 × 30): "
+             f"{status.get('diners_sufficiency')}; для composite (20/20): "
+             f"{status.get('composite_sufficiency')}."]
+    cards = status.get("latest_cards") or []
+    if cards:
+        lines.append("Модели-карточки (последние версии):")
+        for c in cards:
+            mae = (c.get("metrics") or {}).get("mae_diners_mean") or \
+                  (c.get("metrics") or {}).get("mae_mean")
+            lines.append(f"- {c.get('model_id')} v{c.get('version')} "
+                         f"({c.get('model_name')}), MAE={_fmt_num(mae)}")
+    else:
+        lines.append("Модели-карточек нет: backtest'ы ещё не запускались "
+                     "(forecast-diners / forecast-composite).")
+    promo = status.get("latest_promotion") or {}
+    if promo:
+        lines.append(f"Последнее решение gate: {promo.get('model_id')} v"
+                     f"{promo.get('version')} — вердикт в карточке.")
+    for w in status.get("warnings", []):
+        lines.append(f"предупреждение: {w}")
+    return "\n".join(lines)
+
+
 def explain_school_overview(facts: dict) -> str:
     """Рендер пакета фактов sra.assistant.tools.school_overview."""
     lines = [f"=== Статус школы {facts.get('school_id')} "

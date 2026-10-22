@@ -84,9 +84,15 @@
   в [0.60, 0.95]; при PROMOTED — модель-карточка с аудитом критериев,
   при REJECTED — причины. На FI честно REJECTED (diners: лучший ML-кандидат
   хуже контрольного menu_history) — №8;
-- [ ] `aggregate` в import-map (порции → сессии дня) — №7;
-- [ ] explain_* для diners/composite/quality/alerts + инструмент `ml_status`
-  — №9.
+- [x] `aggregate` в import-map (опция options.aggregate: одна строка = одна
+  выданная порция; группы (школа, дата, приём) → сессия дня; meals_served =
+  строк, attendance = уникальные ученики (distinct pupil_column, иначе None
+  — посещаемость не выдумываем); расхождение поля уровня группы = ошибка
+  строки, батч атомарен; W_AGG_OBSERVED_MIN) — №7;
+- [x] explain_* (sra/explain.py): diners/composite/quality/alerts/promotion/
+  ml_status + read-only инструмент `ml-status` (sra/status.py: данные,
+  честная достаточность точек, последние карточки моделей, последнее решение
+  gate; ничего не пишет); explain-тексты подключены в демо-шаг 7e — №9.
 
 **P1 — удобство и надёжность:**
 - [ ] `digest` (№16), Санправ-проверка порций (№17), репетиция года (№18),
