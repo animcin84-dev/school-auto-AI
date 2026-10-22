@@ -25,6 +25,8 @@
   eval-compare — сравнение фаз BASELINE/INTERVENTION (разведочный анализ)
   pilot-package — документы пилота для реальной школы (этап 5b)
   forecast-diners — backtest прогноза едоков (базовые vs ML-кандидаты)
+  quality-check — контроль качества данных (+ кросс-чек с источником FI)
+  alerts — алерты питания (индекс несъедаемости vs порог нацстандарта РК)
 
 Отсутствие команды эксплуатации (реальное вмешательство) — намеренное:
 условия перехода в OPERATIONAL не выполнены (см. docs/ARCHITECTURE_AND_GATES.md).
@@ -221,14 +223,47 @@ def cmd_forecast_diners(args) -> int:
                     params=m.get("params", {}),
                     data_meta={"school_id": args.school_id,
                                "meal_type": args.meal_type,
-                               "n_train": report["n_train"],
-                               "test_range": report["test_range"],
+                               "evaluation": report["evaluation"],
+                               "first_test_date": report["first_test_date"],
+                               "last_test_date": report["last_test_date"],
                                "dataset_version": store.get_dataset_version()},
-                    metrics={"mae_diners": m.get("mae"),
-                             "interval": m.get("interval")})
+                    metrics={"mae_diners_mean": m.get("mae_mean"),
+                             "mae_per_origin": m.get("mae_per_origin"),
+                             "intervals": m.get("intervals")})
             report["model_cards_saved"] = True
         _print(report)
         return 0 if report["status"] == "OK" else 2
+    finally:
+        store.close()
+
+
+def cmd_quality_check(args) -> int:
+    """Отчёт качества данных школы + опциональный кросс-чек с источником FI."""
+    from sra.quality import crosscheck_zenodo_fi, data_quality_report
+    store = EvidenceStore(args.db, args.environment)
+    try:
+        report = data_quality_report(store, args.school_id)
+        if args.file:
+            if args.dataset != "finland":
+                raise SraError("кросс-чек с источником реализован для finland",
+                               code="E_BAD_DATASET")
+            report["source_crosscheck"] = crosscheck_zenodo_fi(
+                args.file, store, args.school_id)
+        _print(report)
+        return 0
+    finally:
+        store.close()
+
+
+def cmd_alerts(args) -> int:
+    """Алерты питания (индекс несъедаемости vs порог нацстандарта РК)."""
+    from sra.monitoring import nutrition_alerts
+    store = EvidenceStore(args.db, args.environment)
+    try:
+        _print({"school_id": args.school_id,
+                "alerts": nutrition_alerts(store, args.school_id,
+                                           uneaten_threshold_pct=args.threshold)})
+        return 0
     finally:
         store.close()
 
@@ -665,6 +700,26 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--calib-days", type=int, default=20)
     sp.add_argument("--no-save-cards", action="store_true")
     sp.set_defaults(func=cmd_forecast_diners)
+
+    sp = sub.add_parser("quality-check",
+                        help="качество данных школы (полнота, выбросы, календарь)")
+    sp.add_argument("--db", required=True)
+    sp.add_argument("--environment", choices=sorted(enums.ENVIRONMENTS),
+                    default=enums.ENV_OPEN)
+    sp.add_argument("--school-id", required=True)
+    sp.add_argument("--file", default=None,
+                    help="xlsx первоисточника для кросс-чека (finland)")
+    sp.add_argument("--dataset", choices=["finland", "latvia"], default="finland")
+    sp.set_defaults(func=cmd_quality_check)
+
+    sp = sub.add_parser("alerts",
+                        help="алерты питания (несъедаемость vs порог РК 30%)")
+    sp.add_argument("--db", required=True)
+    sp.add_argument("--environment", choices=sorted(enums.ENVIRONMENTS),
+                    default=enums.ENV_OPEN)
+    sp.add_argument("--school-id", required=True)
+    sp.add_argument("--threshold", type=float, default=30.0)
+    sp.set_defaults(func=cmd_alerts)
 
     sp = sub.add_parser("eval-compare",
                         help="сравнение фаз BASELINE/INTERVENTION (разведочный анализ)")

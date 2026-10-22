@@ -22,6 +22,7 @@
 - [docs/PHASE3.md](docs/PHASE3.md) — отчёт по этапу 3: базовые прогнозы, хронологический backtest, интервалы, дрейф.
 - [docs/PHASE4.md](docs/PHASE4.md) — отчёт по этапу 4: симуляционный оптимизатор, жёсткие ограничения, согласования версий, сравнение стратегий.
 - [docs/PHASE5.md](docs/PHASE5.md) — отчёт по этапу 5а: фазы исследования, SHADOW-контур, мониторинг, дизайн оценки.
+- [docs/INTERVENTIONS.md](docs/INTERVENTIONS.md) — каталог вмешательств с классами доказательности (чужие эффекты, переносить только через локальный протокол).
 - [docs/ROADMAP.md](docs/ROADMAP.md) — план развития: ML-трек с экспериментом на реальных данных, интеграция с «Социальный кошелёк», конформальные апгрейды.
 - [docs/PHASE6.md](docs/PHASE6.md) — отчёт по этапу 6: детерминированные объяснения, ограниченные read-only инструменты помощника (без LLM).
 - [AGENTS.md](AGENTS.md) — обязательные правила для ИИ, работающего в этом репозитории.
@@ -34,7 +35,7 @@
 ориентиром для этапа эксплуатации и требует отдельного разрешения на установку).
 
 ```bash
-python3 -m unittest discover -s tests          # 250 тестов (и без, и со sklearn)
+python3 -m unittest discover -s tests          # 258 тестов (и без, и со sklearn)
 python3 -m sra gen-calibrated --dir data/demo-calibrated --seed 2026
                                                # откалиброванный SYNTHETIC v2:
                                                # порции по нормам РК, доли отходов
@@ -55,6 +56,13 @@ python3 -m sra forecast-diners --db data/open/open.sqlite3 --environment OPEN \
                                                # backtest прогноза едоков:
                                                # базовые правила vs ridge vs GBDT
                                                # (ML: scripts/setup-ml.sh)
+python3 -m sra quality-check --db data/open/open.sqlite3 --environment OPEN \
+    --school-id FI-ZEN-20825233 --file "Food waste data school Finland 2024-2025.xlsx"
+                                               # качество данных + кросс-чек
+                                               # с первоисточником
+python3 -m sra alerts --db data/open/open.sqlite3 --environment OPEN \
+    --school-id LV-ZEN-18441715-S1             # несъедаемость vs порог
+                                               # нацстандарта РК (30%)
 python3 -m sra pilot-package --out docs/pilot-package
                                                # документы пилота для школы КЗ:
                                                # согласие, протокол измерений,
@@ -78,7 +86,8 @@ python3 -m sra shadow-run --db data/demo/demo.sqlite3 --environment demo \
 
 Статус: каркас, демо, прогнозы, симуляционный оптимизатор, SHADOW-контур и
 объясняющий слой, откалиброванный генератор, импорт чужих открытых данных
-(OPEN-среда), сравнение фаз, генератор пакета пилота, прогноз едоков с ML-кандидатами проверены автотестами (250); реальные открытые
+(OPEN-среда), сравнение фаз, генератор пакета пилота, прогноз едоков с ML-кандидатами, контроль качества, KZ-календарь,
+алерты питания проверены автотестами (258); реальные открытые
 датасеты Zenodo (Финляндия 155 дней, Латвия 4 школы) импортированы;
 см. docs/OPEN_DATA_PLAN.md. Реальных данных школы КЗ нет
 данных, обученных моделей, нормативов и одобрений в проекте НЕТ; при нехватке

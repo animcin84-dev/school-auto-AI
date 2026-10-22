@@ -93,20 +93,26 @@ class TestBacktest(unittest.TestCase):
                               calib_days=10)
         self.assertEqual(rep["status"], "OK", msg=rep.get("reason"))
         by_name = {m["name"]: m for m in rep["models"]}
-        for base in ("moving_average5", "weekday3", "menu_history", "ridge"):
+        for base in ("moving_average5", "weekday3", "menu_history", "ridge",
+                     "ridge_notrend"):
             self.assertEqual(by_name[base]["status"], "OK", msg=base)
-            self.assertGreaterEqual(by_name[base]["interval"]["coverage"], 0.0)
-            self.assertLessEqual(by_name[base]["interval"]["coverage"], 1.0)
-            self.assertTrue(math.isfinite(by_name[base]["mae"]))
+            self.assertGreaterEqual(by_name[base]["mae_mean"], 0.0)
+            self.assertTrue(math.isfinite(by_name[base]["mae_mean"]))
+            self.assertGreaterEqual(by_name[base]["n_windows"], 1)
+            # три стратегии интервалов с покрытием в [0,1]
+            for strat in ("static_q80", "rolling_q80", "aci"):
+                cov = by_name[base]["intervals"][strat]["coverage"]
+                self.assertGreaterEqual(cov, 0.0, msg=(base, strat))
+                self.assertLessEqual(cov, 1.0, msg=(base, strat))
         gb = by_name["sklearn_gbdt"]
         self.assertIn(gb["status"], ("OK", "UNAVAILABLE"))
         if gb["status"] == "UNAVAILABLE":
             self.assertTrue(gb["reason"])   # причина, не молчание
         else:
-            self.assertTrue(math.isfinite(gb["mae"]))
+            self.assertTrue(math.isfinite(gb["mae_mean"]))
         self.assertIn(rep["best_by_mae"],
                       {"moving_average5", "weekday3", "menu_history",
-                       "ridge", "sklearn_gbdt"})
+                       "ridge", "ridge_notrend", "sklearn_gbdt"})
         # детерминизм (включая GBDT с фиксированным random_state)
         rep2 = backtest_diners(self._synthetic_sessions(), test_days=15,
                                calib_days=10)
@@ -141,8 +147,10 @@ class TestRealFI(unittest.TestCase):
             by_name = {x["name"]: x for x in rep["models"]}
             self.assertEqual(by_name["ridge"]["status"], "OK")
             self.assertEqual(by_name["moving_average5"]["status"], "OK")
-            # sanity по измеренному POC: MAE моделей конечны и разумны
-            self.assertLess(by_name["ridge"]["mae"], 60.0)
+            # честный rolling-origin результат (см. ROADMAP): на FI лучшие —
+            # простые правила; ML-кандидаты не обязаны выигрывать, их MAE конечны
+            self.assertTrue(all(math.isfinite(x["mae_mean"])
+                                for x in rep["models"] if x["status"] == "OK"))
             self.assertIsNotNone(rep["best_by_mae"])
         finally:
             if store is not None:

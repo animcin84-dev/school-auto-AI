@@ -77,3 +77,45 @@ def monitor_shadow(store, school_id: str, meal_type: str,
                 "предложения (propose_adjustment); cost_delta — SIMULATED-контрфакты, "
                 "не измеренная экономия",
     }
+
+
+def nutrition_alerts(store, school_id: str, *,
+                     uneaten_threshold_pct: float = 30.0) -> list[dict]:
+    """Алерты по питанию на основе метрик (этап: план P0-4).
+
+    Порог 30% — из нацстандарта РК 2025: если более 30% блюд остаются
+    нетронутыми, меню пересматривается (zakon.kz 6490135; класс NORM_KZ).
+    Порог конфигурируем. Нет данных → нет алерта, но и нет молчаливого OK:
+    возвращается элемент с status=UNAVAILABLE и причиной.
+    """
+    from .metrics import build_metric_report
+    sessions = store.fetch_sessions(school_id=school_id)
+    observations = store.fetch_observations(school_id=school_id)
+    rep = build_metric_report(sessions, observations)
+    alerts: list[dict] = []
+    ui = next((m for m in rep["metrics"] if m["name"] == "UneatenIndex"), None)
+    if ui is None:
+        alerts.append({"code": "UNEATEN_INDEX_UNAVAILABLE", "severity": "INFO",
+                       "status": "UNAVAILABLE",
+                       "reason": "метрика UneatenIndex не построена"})
+        return alerts
+    if ui["status"] != "OK":
+        alerts.append({"code": "UNEATEN_INDEX_UNAVAILABLE", "severity": "INFO",
+                       "status": "UNAVAILABLE", "reason": ui.get("reason") or ui["status"],
+                       "note": "нет данных — нет числа; причина вместо молчания"})
+        return alerts
+    value = ui["value"]
+    if value > uneaten_threshold_pct:
+        alerts.append({
+            "code": "UNEATEN_INDEX_HIGH", "severity": "WARN",
+            "status": "OK", "value_pct": value,
+            "threshold_pct": uneaten_threshold_pct,
+            "note": ("превышен порог нацстандарта РК: при >30% нетронутых блюд "
+                     "меню подлежит пересмотру; решение — за бракеражной "
+                     "комиссией школы, не за системой"),
+        })
+    else:
+        alerts.append({"code": "UNEATEN_INDEX_OK", "severity": "INFO",
+                       "status": "OK", "value_pct": value,
+                       "threshold_pct": uneaten_threshold_pct})
+    return alerts
