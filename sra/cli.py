@@ -1,37 +1,42 @@
 """CLI School Resource Autopilot (python -m sra).
 
-Команды этапа 1:
-  init-db     — создать хранилище (обязательно указать --environment real|demo)
-  import      — импорт CSV (sessions|observations), атомарный батч, валидация до записи
-  metrics     — серверный отчёт метрик по школе и периоду
-  verify      — процедура VERIFIED для реальной записи (verifier, method, source)
-  revise      — ревизия записи (причина + новая recorded_at; VERIFIED -> повторная проверка)
-  policies    — регистрация/проверка/поиск политик
+ГРУППЫ КОМАНД
+Данные и хранилище:
+  init-db     — создать хранилище (--environment real|demo|open)
+  import      — импорт CSV (sessions|observations), атомарный батч
+  import-open — импорт открытых датасетов (finland|latvia) из xlsx
+  import-map  — импорт CSV по JSON-карте (в т.ч. aggregate: порции -> сессии)
+  revise      — ревизия записи (причина + новая recorded_at)
+  verify      — процедура VERIFIED для реальной записи
+Метрики и решения:
+  metrics     — отчёт метрик по школе и периоду
   decide      — предложение действия (этап 1: всегда NO_CHANGE с причинами)
-  forecast    — хронологический backtest базовых прогнозов (этап 3; DATA_NOT_READY при нехватке данных)
-  optimize    — симуляционное предложение изменения объёма (этап 4; REAL => NO_CHANGE)
+  optimize    — симуляционное предложение изменения объёма (REAL => NO_CHANGE)
   compare     — сравнение стратегий управления объёмом (SIMULATED)
-  phase       — фазы исследования школы (ворота переходов; INTERVENTION заблокирован)
-  shadow-run  — SHADOW-контур: симуляционные предложения по окну дней без исполнения
-  monitor     — мониторинг качества прогнозов по shadow-записям
-  design      — проект плана оценки эффекта (требуемый объём выборки)
-  explain     — детерминированное русскоязычное объяснение статуса школы
-  assistant-tools  — список разрешённых read-only инструментов помощника
-  assistant-call   — вызов инструмента помощника (валидация, изоляция, аудит)
-  selfcheck   — проверка инвариантов хранилища
-  audit       — хвост журнала аудита
-  demo        — изолированное синтетическое демо (DEMO-среда)
-  gen-calibrated — откалиброванный SYNTHETIC-генератор v2 (параметры из источников)
-  eval-compare — сравнение фаз BASELINE/INTERVENTION (разведочный анализ)
-  pilot-package — документы пилота для реальной школы (этап 5b)
+  policies    — регистрация/проверка/поиск политик
+Прогнозы и ML:
+  forecast    — хронологический backtest базовых прогнозов
   forecast-diners — backtest прогноза едоков (базовые vs ML-кандидаты)
+  forecast-composite — композит (едоки x г/едока) vs прямой прогноз массы
+  ml-gate     — promotion gate: формальное принятие модели + карточка решения
+  ml-status   — read-only сводка ML-состояния (данные/достаточность/карточки)
+Качество и алерты:
   quality-check — контроль качества данных (+ кросс-чек с источником FI)
-  forecast-composite — композит (едоки × г/едока) vs прямой прогноз
-  import-map — импорт CSV по карте колонок (внешние выгрузки, вкл. Соцкошелёк)
-  alerts — алерты питания (индекс несъедаемости vs порог нацстандарта РК)
-
-Отсутствие команды эксплуатации (реальное вмешательство) — намеренное:
-условия перехода в OPERATIONAL не выполнены (см. docs/ARCHITECTURE_AND_GATES.md).
+  check-norms — проверка порций по Санправилам РК (предупреждение, не ошибка)
+  alerts      — алерты питания (индекс несъедаемости vs порог нацстандарта)
+  monitor     — мониторинг качества прогнозов по shadow-записям
+Оценка и протокол:
+  eval-compare — сравнение фаз BASELINE/INTERVENTION (разведочный анализ)
+  design      — проект плана оценки эффекта (требуемый объём выборки)
+  phase       — фазы исследования (ворота переходов; INTERVENTION заблокирован)
+  shadow-run  — SHADOW-контур: предложения без исполнения
+  rehearse-year — репетиция учебного года на синтетике (тренинг протокола)
+Помощник и сводки:
+  explain     — русскоязычное объяснение статуса школы
+  digest      — дайджест для директора/бракеражной комиссии (read-only)
+  assistant-tools / assistant-call — read-only инструменты помощника
+Служебные:
+  selfcheck, audit, demo, gen-calibrated, pilot-package
 """
 
 from __future__ import annotations
@@ -520,6 +525,76 @@ def cmd_ml_status(args) -> int:
         store.close()
 
 
+def cmd_check_norms(args) -> int:
+    """Проверка порций по Санправилам РК (предупреждение, не ошибка)."""
+    from sra.explain import explain_norms
+    from sra.norms import check_portions
+    store = EvidenceStore(args.db, args.environment)
+    try:
+        sessions = [s for s in store.fetch_sessions(school_id=args.school_id)
+                    if s.meal_type == args.meal_type]
+        observations = [o for o in store.fetch_observations(school_id=args.school_id)
+                        if o.session_id in {s.session_id for s in sessions}]
+        report = check_portions(observations, age_group=args.age_group,
+                                sessions=sessions, per="total")
+        report["explanation"] = explain_norms(report)
+        _print(report)
+        return 0 if report["status"] in ("OK", "WARN") else 2
+    finally:
+        store.close()
+
+
+def cmd_digest(args) -> int:
+    """Дайджест для директора/бракеражной комиссии (read-only)."""
+    from sra.digest import build_digest
+    from sra.explain import explain_digest
+    store = EvidenceStore(args.db, args.environment)
+    try:
+        d = build_digest(store, args.school_id, meal_type=args.meal_type,
+                         days=args.days,
+                         uneaten_threshold_pct=args.threshold,
+                         age_group=args.age_group)
+        d["explanation"] = explain_digest(d)
+        _print(d)
+        return 0
+    finally:
+        store.close()
+
+
+def cmd_rehearse_year(args) -> int:
+    """Репетиция учебного года на синтетике (тренинг протокола)."""
+    from sra.rehearsal import run_rehearsal
+    report = run_rehearsal(args.dir, seed=args.seed, days=args.days,
+                           enrollment=args.enrollment)
+    steps = report["steps"]
+    summary = {
+        "data_nature": report["data_nature"],
+        "environment": report["environment"],
+        "school_id": report["school_id"],
+        "seed": report["seed"],
+        "steps": {k: (v.get("status")
+                      or ("ok" if (v.get("ok") or v.get("read_only"))
+                          else "fail")
+                      if isinstance(v, dict)
+                      else (f"{len(v)} шт." if isinstance(v, list) else "?"))
+                  for k, v in steps.items()},
+        "phase_transitions": [
+            {"phase": t["phase"], "result": t["result"]}
+            for t in steps["phases"]["transitions"]],
+        "compare_phases": {k: steps["compare_phases"].get(k)
+                           for k in ("status", "diff_g", "diff_pct_of_baseline")
+                           if k in steps["compare_phases"]},
+        "diners": {"status": steps["diners_backtest"].get("status"),
+                   "best_by_mae": steps["diners_backtest"].get("best_by_mae")},
+        "norms_status": steps["norms"].get("status"),
+        "digest_explanation": steps["digest"].get("explanation"),
+        "warnings": report["warnings"],
+        "report_file": report.get("report_file"),
+    }
+    _print(summary)
+    return 0
+
+
 def cmd_forecast(args) -> int:
     from sra.forecasting.backtest import run_backtest
     from sra.forecasting.series import make_snapshot_fn
@@ -902,6 +977,42 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--school-id", required=True)
     sp.add_argument("--meal-type", default="LUNCH")
     sp.set_defaults(func=cmd_ml_status)
+    sp = sub.add_parser("check-norms",
+                        help="проверка порций по Санправилам РК "
+                             "(предупреждение качества, не ошибка)")
+    sp.add_argument("--db", required=True)
+    sp.add_argument("--environment", choices=sorted(enums.ENVIRONMENTS),
+                    default=enums.ENV_OPEN)
+    sp.add_argument("--school-id", required=True)
+    sp.add_argument("--meal-type", default="LUNCH")
+    sp.add_argument("--age-group", default="6-11",
+                    help="возрастная группа норм (доступна 6-11)")
+    sp.set_defaults(func=cmd_check_norms)
+
+    sp = sub.add_parser("digest",
+                        help="дайджест для директора/бракеражной комиссии: "
+                             "метрики окна, качество, порции, алерты, ML")
+    sp.add_argument("--db", required=True)
+    sp.add_argument("--environment", choices=sorted(enums.ENVIRONMENTS),
+                    default=enums.ENV_OPEN)
+    sp.add_argument("--school-id", required=True)
+    sp.add_argument("--meal-type", default="LUNCH")
+    sp.add_argument("--days", type=int, default=7,
+                    help="ширина окна по последней дате сессий")
+    sp.add_argument("--threshold", type=float, default=30.0)
+    sp.add_argument("--age-group", default="6-11")
+    sp.set_defaults(func=cmd_digest)
+
+    sp = sub.add_parser("rehearse-year",
+                        help="репетиция учебного года на синтетике: полный "
+                             "протокол с настоящими воротами фаз (тренинг)")
+    sp.add_argument("--dir", required=True,
+                    help="каталог репетиции (создаётся; только SYNTHETIC)")
+    sp.add_argument("--seed", type=int, default=2026)
+    sp.add_argument("--days", type=int, default=170,
+                    help="учебных дней (по умолчанию год ~170)")
+    sp.add_argument("--enrollment", type=int, default=120)
+    sp.set_defaults(func=cmd_rehearse_year)
 
     sp = sub.add_parser("import-map",
                         help="импорт CSV по карте колонок (JSON) — универсальный "
@@ -926,7 +1037,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.set_defaults(func=cmd_quality_check)
 
     sp = sub.add_parser("alerts",
-                        help="алерты питания (несъедаемость vs порог РК 30%)")
+                        help="алерты питания (несъедаемость vs порог РК 30%%)")
     sp.add_argument("--db", required=True)
     sp.add_argument("--environment", choices=sorted(enums.ENVIRONMENTS),
                     default=enums.ENV_OPEN)

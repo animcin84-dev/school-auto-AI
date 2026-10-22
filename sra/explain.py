@@ -395,6 +395,100 @@ def explain_ml_status(status: dict) -> str:
     return "\n".join(lines)
 
 
+def explain_norms(n: dict) -> str:
+    """Русский текст проверки порций по Санправилам."""
+    if n.get("status") == "UNAVAILABLE":
+        return (f"=== Проверка порций (Санправила РК) ===\n"
+                f"НЕДОСТУПНО: {n.get('reason')}")
+    lines = [f"=== Проверка порций (Санправила РК, группа "
+             f"{n.get('age_group')} лет) ===",
+             f"Семантика порции: {n.get('portion_semantics')}."]
+    for d in n.get("dishes", []):
+        if d.get("status") == "UNAVAILABLE":
+            lines.append(f"- {d['dish']}: нет измерений.")
+            continue
+        lo, hi = d["norm_g"]
+        mark = {"OK": "в норме", "WARN": "ВНЕ НОРМЫ"}.get(d.get("status"),
+                                                          d.get("status"))
+        lines.append(f"- {d['dish']}: медиана {d['median_g']} г при норме "
+                     f"{lo}–{hi} г — {mark}; вне нормы "
+                     f"{d.get('share_out_pct')}% (мин {d.get('min_g')}, "
+                     f"макс {d.get('max_g')})")
+        for ex in (d.get("examples") or [])[:2]:
+            lines.append(f"  пример: {ex}")
+    if n.get("dishes_without_norm"):
+        lines.append(f"Блюда без нормы в карте: "
+                     f"{n['dishes_without_norm'][:6]}.")
+    lines.append("Порция вне нормы — предупреждение качества, не ошибка; "
+                 "решение за бракеражной комиссией.")
+    return "\n".join(lines)
+
+
+def explain_digest(d: dict) -> str:
+    """Русский текст дайджеста для директора/бракеражной комиссии."""
+    head = (f"=== Дайджест питания ({d.get('school_id')}, "
+            f"{d.get('meal_type')}) ===")
+    lines = [head]
+    w = d.get("window") or {}
+    if w.get("date_from"):
+        lines.append(f"Окно: {w['date_from']}…{w['date_to']}.")
+    else:
+        lines.append("Окно: данных нет.")
+    wm = d.get("window_metric") or {}
+    if wm.get("status") == "OK":
+        lines.append(f"Отходы на тарелках за окно: "
+                     f"{wm['plate_waste_per_diner_g']} г на едока "
+                     f"(Σ {wm['plate_waste_g_total']} г / Σ едоков "
+                     f"{wm['diners_total']}, дней с сессиями "
+                     f"{wm['days_with_sessions']}).")
+    else:
+        lines.append(f"Метрика окна недоступна: {wm.get('reason')}.")
+    q = d.get("quality") or {}
+    failed = [c for c in (q.get("checks") or []) if not c.get("ok")]
+    if q.get("status") == "DATA_NOT_READY":
+        lines.append(f"Качество данных: {q.get('reason')}.")
+    elif failed:
+        lines.append(f"Качество данных: ПРОБЛЕМ {len(failed)}: "
+                     + "; ".join(str(c.get("name") or "?") for c in failed)
+                     + ".")
+    else:
+        lines.append(f"Качество данных: проверок пройдено "
+                     f"{len(q.get('checks') or [])}, проблем нет.")
+    n = d.get("norms") or {}
+    if n.get("status") == "WARN":
+        parts = []
+        for dish in n.get("dishes", []):
+            if dish.get("status") == "WARN":
+                lo, hi = dish["norm_g"]
+                parts.append(f"{dish['dish']}: медиана {dish['median_g']} г "
+                             f"при норме {lo}–{hi} г "
+                             f"(вне нормы {dish['share_out_pct']}%)")
+        lines.append("Порции вне норм Санправил: " + "; ".join(parts) + ".")
+    elif n.get("status") == "UNAVAILABLE":
+        lines.append(f"Проверка порций: {n.get('reason')}.")
+    else:
+        lines.append("Порции в нормах Санправил — отклонений нет.")
+    for a in d.get("alerts", []):
+        if a.get("code") == "UNEATEN_INDEX_HIGH":
+            lines.append(f"АЛЕРТ: индекс несъедаемости "
+                         f"{_fmt_num(a['value_pct'])}% > порога "
+                         f"{a['threshold_pct']}% — меню подлежит пересмотру "
+                         "(решение за комиссией).")
+        elif a.get("code") == "UNEATEN_INDEX_OK":
+            lines.append(f"Индекс несъедаемости {_fmt_num(a['value_pct'])}% — "
+                         f"в пределах порога {a['threshold_pct']}%.")
+        elif a.get("code") == "UNEATEN_INDEX_UNAVAILABLE":
+            lines.append(f"Индекс несъедаемости недоступен: {a.get('reason')}.")
+    ml = d.get("ml_status") or {}
+    lines.append(f"ML: diners — {ml.get('diners_sufficiency')}; composite — "
+                 f"{ml.get('composite_sufficiency')}.")
+    for warn in ml.get("warnings", []):
+        lines.append(f"Предупреждение: {warn}.")
+    lines.append("Дайджест только читает данные; действий система не "
+                 "исполняет.")
+    return "\n".join(lines)
+
+
 def explain_school_overview(facts: dict) -> str:
     """Рендер пакета фактов sra.assistant.tools.school_overview."""
     lines = [f"=== Статус школы {facts.get('school_id')} "

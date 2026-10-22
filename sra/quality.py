@@ -115,9 +115,9 @@ def data_quality_report(store, school_id: str, *, calendar: dict | None = None) 
 
     # 5. Сессии в неучебные дни (по ориентировочному календарю).
     off_days = [{"session_id": s.session_id, "date": s.service_date.isoformat(),
-                 "reason": reason}
+                 "reason": chk[1]}
                 for s in sorted(sessions, key=lambda x: x.service_date)
-                if not is_school_day(s.service_date, cal)[0]]
+                if not (chk := is_school_day(s.service_date, cal))[0]]
     add("sessions_on_non_school_days", len(off_days) == 0, {
         "cases": off_days[:20], "note": "календарь ориентировочный; если день "
                                         "был учебным — обновите конфиг календаря",
