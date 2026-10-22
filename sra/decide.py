@@ -127,6 +127,9 @@ def propose_action(store, policies, *, school_id: str, target_date: str,
     ]
     if env == enums.ENV_DEMO:
         notes.append("среда DEMO: данные и политики синтетические; результат — симуляция сценария")
+    if env == enums.ENV_OPEN:
+        notes.append("среда OPEN: чужие открытые измерения; расчёт метрик/прогнозов да, "
+                     "действия — нет")
     return DecisionProposal(
         proposal_id=uuid.uuid4().hex,
         mode=mode,

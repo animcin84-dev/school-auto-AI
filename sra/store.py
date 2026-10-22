@@ -416,6 +416,14 @@ class EvidenceStore:
                     f"REAL-хранилище принимает только {enums.REAL_OBSERVED}; получено {sorted(bad)} "
                     f"(kind={kind}); синтетика и симуляция живут только в DEMO-среде",
                     code="E_SYNTHETIC_IN_REAL_ENV")
+        elif self.environment == enums.ENV_OPEN:
+            bad = {s for s in statuses if s != enums.REAL_OBSERVED}
+            if bad:
+                raise GuardError(
+                    f"OPEN-хранилище (чужие открытые данные) принимает только "
+                    f"{enums.REAL_OBSERVED}; получено {sorted(bad)} (kind={kind}); "
+                    "наша синтетика живёт только в DEMO-среде",
+                    code="E_SYNTHETIC_IN_OPEN_ENV")
         else:  # DEMO
             bad = {s for s in statuses if s != enums.SYNTHETIC}
             if bad:
@@ -706,6 +714,12 @@ class EvidenceStore:
         Повторная проверка разрешена для pending_verification-ревизий.
         """
         current = self.get_current(entity_type, entity_id)
+        if self.environment == enums.ENV_OPEN:
+            raise GuardError(
+                "в OPEN-среде (чужие открытые данные) наша процедура проверки не применяется: "
+                "мы не проводили измерения; статус REAL_OBSERVED и source_ref достаточно "
+                "честно фиксируют происхождение",
+                code="E_VERIFY_NOT_AVAILABLE_OPEN")
         if current["evidence_status"] == enums.SYNTHETIC:
             raise GuardError(
                 f"{entity_type} {entity_id!r} имеет статус SYNTHETIC и не может стать VERIFIED; "
@@ -765,6 +779,11 @@ class EvidenceStore:
             raise GuardError(
                 "в REAL-среде контур согласования не введён (этап 5); в этапе 4 "
                 "реальные предложения не формируются", code="E_APPROVALS_NOT_AVAILABLE_STAGE4")
+        if self.environment == enums.ENV_OPEN:
+            raise GuardError(
+                "в OPEN-среде (чужие открытые данные) согласования не существуют: "
+                "мы не вмешиваемся в чужую школу",
+                code="E_APPROVALS_NOT_AVAILABLE_OPEN")
         h = proposal_hash(proposal)
         now = self._clock()
         try:
@@ -797,6 +816,11 @@ class EvidenceStore:
                 "исполнение действий в REAL-среде заблокировано: реальное вмешательство "
                 "требует условий этапа 6 (согласие школы, проверенные политики, план)",
                 code="E_EXECUTION_BLOCKED_STAGE4")
+        if self.environment == enums.ENV_OPEN:
+            raise GuardError(
+                "исполнение действий в OPEN-среде невозможно: чужая школа не является "
+                "объектом вмешательства системы",
+                code="E_EXECUTION_BLOCKED_OPEN")
         row = self._conn.execute(
             "SELECT * FROM proposal_approvals WHERE approval_id = ?", (approval_id,)).fetchone()
         if row is None or row["proposal_id"] != pid or row["proposal_hash"] != h:
@@ -961,8 +985,8 @@ class EvidenceStore:
                 if v is not None and v < 0:
                     bad_mass.append({"revision_id": r["revision_id"], "field": f, "value": v})
         add("no_negative_mass", len(bad_mass) == 0, {"violations": bad_mass[:20]})
-        # 6. Нет смешения сред: REAL не содержит SYNTHETIC, DEMO не содержит REAL.
-        if self.environment == enums.ENV_REAL:
+        # 6. Нет смешения сред: REAL/OPEN не содержат SYNTHETIC, DEMO не содержит REAL.
+        if self.environment in (enums.ENV_REAL, enums.ENV_OPEN):
             n = self._conn.execute(
                 "SELECT COUNT(*) n FROM revisions WHERE evidence_status = 'SYNTHETIC'").fetchone()["n"]
         else:
@@ -974,8 +998,8 @@ class EvidenceStore:
         maxv = self._conn.execute("SELECT COALESCE(MAX(dataset_version),0) m FROM revisions").fetchone()["m"]
         cnt = int(self._conn.execute("SELECT value FROM meta WHERE key='dataset_version'").fetchone()["value"])
         add("dataset_version_counter", cnt >= maxv, {"counter": cnt, "max_used": maxv})
-        # 8. В REAL-среде исполнений действий быть не может (этап 4/5а).
-        if self.environment == enums.ENV_REAL:
+        # 8. В REAL/OPEN-средах исполнений действий быть не может (этап 4/5а).
+        if self.environment in (enums.ENV_REAL, enums.ENV_OPEN):
             n_exec = self._conn.execute(
                 "SELECT COUNT(*) n FROM action_executions").fetchone()["n"]
             add("no_executions_in_real", n_exec == 0, {"executions": n_exec})

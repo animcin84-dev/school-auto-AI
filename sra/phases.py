@@ -48,6 +48,15 @@ class PhaseManager:
         return self.store.get_school_phase(school_id)
 
     def transition(self, school_id: str, to_phase: str, *, actor: str,
+                   **kwargs):
+        if getattr(self.store, "environment", None) == "OPEN":
+            raise GuardError(
+                "фазовые протоколы (BASELINE/SHADOW/...) не применимы в OPEN-среде: "
+                "чужие открытые данные не участвуют в протоколах вмешательств нашей школы",
+                code="E_PHASES_NOT_AVAILABLE_OPEN")
+        return self._transition(school_id, to_phase, actor=actor, **kwargs)
+
+    def _transition(self, school_id: str, to_phase: str, *, actor: str,
                    protocol_ref: str | None = None, policy_id: str | None = None,
                    meal_type: str = "LUNCH") -> dict:
         """Переход к следующей фазе. Порядок и ворота проверяются до записи."""

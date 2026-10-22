@@ -81,9 +81,9 @@ def check_policy_usable(row: dict, *, environment: str) -> list[str]:
             problems.append("политика выведена из действия (RETIRED)")
     else:
         if status != enums.POLICY_VERIFIED:
-            problems.append("в REAL-среде требуется VERIFIED-политика; текущий "
+            problems.append(f"в среде {environment} требуется VERIFIED-политика; текущий "
                             f"статус: {status}")
         if nature != enums.REAL_OBSERVED:
-            problems.append("в REAL-среде значения политики должны иметь "
+            problems.append(f"в среде {environment} значения политики должны иметь "
                             "документ-источник (data_nature=REAL_OBSERVED)")
     return problems

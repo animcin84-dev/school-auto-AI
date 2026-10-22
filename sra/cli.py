@@ -95,6 +95,80 @@ def cmd_import(args) -> int:
         store.close()
 
 
+def cmd_import_open(args) -> int:
+    """Импорт ЧУЖИХ открытых данных (Zenodo) в OPEN-среду.
+
+    Статус строк — REAL_OBSERVED с source_ref записи Zenodo; это чужие
+    измерения (Финляндия/Латвия), не данные школы КЗ. Хранилище должно быть
+    создано с --environment open. Рядом с БД пишутся CSV-копии контрактного
+    формата (аудиторский след преобразования) и отчёт-JSON.
+    """
+    import csv as _csv
+    from sra import contracts
+    from sra.ingest import xlsx_min, zenodo_fi, zenodo_lv
+    from sra.validation import validate_observations, validate_sessions
+
+    store = EvidenceStore(args.db, enums.ENV_OPEN)
+    try:
+        if store.environment != enums.ENV_OPEN:
+            raise SraError("import-open требует хранилище среды OPEN "
+                           "(создайте: init-db --environment open)", code="E_BAD_ENV")
+        wb = xlsx_min.read_workbook(args.file)
+        if args.dataset == "finland":
+            mapped = zenodo_fi.map_workbook(
+                wb, **({"school_id": args.school_id} if args.school_id else {}))
+        else:
+            mapped = zenodo_lv.map_workbook(
+                wb, **({"school_prefix": args.school_id} if args.school_id else {}))
+        report = dict(mapped["report"])
+        s_rep = validate_sessions(mapped["sessions"], existing_ids=store.session_ids())
+        o_rep = validate_observations(
+            mapped["observations"], known_sessions={r.session_id for r in s_rep.accepted},
+            existing_observation_ids=store.observation_ids(),
+            existing_pairs=store.observation_pairs())
+        if not s_rep.ok or not o_rep.ok:
+            report["imported"] = 0
+            report["rejected_reasons"] = ([i.to_dict() for i in s_rep.errors]
+                                          + [i.to_dict() for i in o_rep.errors])
+            report["note"] = "импорт атомарен: батч с ошибками не записан"
+            _print(report)
+            return 2
+        # CSV-копии (аудиторский след преобразования xlsx → контракт)
+        out_dir = Path(args.out_dir) if args.out_dir else Path(args.db).parent
+        out_dir.mkdir(parents=True, exist_ok=True)
+        tag = "fi" if args.dataset == "finland" else "lv"
+        for kind, recs, header in (
+                ("sessions", s_rep.accepted, contracts.SESSION_FIELDS),
+                ("observations", o_rep.accepted, contracts.OBSERVATION_FIELDS)):
+            # .audit.csv — копия для аудита человеком (не для повторного импорта:
+            # заголовок шире контрактного на notes/quality_flags сознательно)
+            path = out_dir / f"{tag}-{kind}.audit.csv"
+            with open(path, "w", newline="", encoding="utf-8") as fh:
+                w = _csv.DictWriter(fh, fieldnames=list(header) + ["notes", "quality_flags"])
+                w.writeheader()
+                for r in recs:
+                    payload = {k: r.to_payload().get(k, "") for k in header}
+                    payload["notes"] = (r.notes or "")
+                    payload["quality_flags"] = ";".join(r.quality_flags)
+                    w.writerow(payload)
+            report[f"csv_copy_{kind}"] = str(path)
+        res_s = store.import_sessions(s_rep.accepted, actor=args.actor,
+                                      import_meta={"source_file": str(args.file),
+                                                   "dataset": report["dataset"]})
+        res_o = store.import_observations(o_rep.accepted, actor=args.actor,
+                                          import_meta={"source_file": str(args.file),
+                                                       "dataset": report["dataset"]})
+        report["imported_sessions"] = res_s["imported"]
+        report["imported_observations"] = res_o["imported"]
+        report["dataset_version"] = res_s["dataset_version"]
+        report["warnings"] = [i.to_dict() for i in s_rep.warnings] + \
+                             [i.to_dict() for i in o_rep.warnings]
+        _print(report)
+        return 0
+    finally:
+        store.close()
+
+
 def cmd_metrics(args) -> int:
     store = EvidenceStore(args.db, args.environment)
     try:
@@ -502,6 +576,19 @@ def build_parser() -> argparse.ArgumentParser:
         sp.add_argument("--environment", required=env_required, type=lambda s: s.upper(),
                         choices=sorted(enums.ENVIRONMENTS),
                         help="среда: real | demo (регистр не важен; должна совпадать с маркером БД)")
+
+    sp = sub.add_parser("import-open",
+                        help="импорт чужих открытых данных (Zenodo xlsx) в OPEN-среду")
+    sp.add_argument("--db", required=True)
+    sp.add_argument("--file", required=True, help="xlsx-файл датасета")
+    sp.add_argument("--dataset", required=True, choices=["finland", "latvia"])
+    sp.add_argument("--school-id", default=None,
+                    help="идентификатор школы (по умолчанию FI-ZEN-20825233 / "
+                         "LV-ZEN-18441715-<School_ID>)")
+    sp.add_argument("--actor", default="open-data-import")
+    sp.add_argument("--out-dir", default=None,
+                    help="куда писать CSV-копии (по умолчанию рядом с БД)")
+    sp.set_defaults(func=cmd_import_open)
 
     sp = sub.add_parser("init-db", help="создать хранилище")
     db_args(sp)

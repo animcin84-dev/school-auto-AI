@@ -44,6 +44,8 @@ COND_BELOW_RESOLUTION = "CHANGE_BELOW_RESOLUTION"
 COND_MODE_BLOCKED_STAGE4 = "MODE_BLOCKED_STAGE4_REAL"
 
 REASON_DESCRIPTIONS.update({
+    "OPEN_ENV_FOREIGN_DATA": "среда OPEN: чужие открытые измерения — действия "
+                             "не предлагаются и не выполняются",
     COND_FORECAST_UNAVAILABLE: "прогноз на целевую дату недоступен (холодный старт/мало истории)",
     COND_NO_DEMAND_DISTRIBUTION: "недостаточно калибровочных остатков для распределения спроса",
     COND_NO_BASELINE: "неизвестна базовая линия «готовить как обычно» (нет истории prepared)",
@@ -106,6 +108,18 @@ def propose_adjustment(store, policies, *, school_id: str, meal_type: str,
                                        "сценариев (SHADOW-аналитика); предложение действия "
                                        "появится не раньше этапов 5–6 при выполненных "
                                        "условиях ворот"],
+                          policy_refs=base.policy_refs)
+
+    # 1а. OPEN-среда: чужие открытые данные — расчёт метрик/прогнозов да, действия нет.
+    if store.environment == enums.ENV_OPEN:
+        base = propose_action(store, policies, school_id=school_id, target_date=target_date,
+                              requested_mode=requested_mode or enums.MODE_OPERATIONAL)
+        codes = list(dict.fromkeys(base.reasons + [COND_MODE_BLOCKED_STAGE4, "OPEN_ENV_FOREIGN_DATA"]))
+        return _no_change(store, school_id=school_id, target_date=target,
+                          mode=requested_mode or enums.MODE_OPERATIONAL, codes=codes,
+                          extra_notes=["среда OPEN: это чужие открытые измерения "
+                                       "(source_ref указывает источник); система не предлагает "
+                                       "и не выполняет действий в чужой школе"],
                           policy_refs=base.policy_refs)
 
     # 2. DEMO: политика решения.

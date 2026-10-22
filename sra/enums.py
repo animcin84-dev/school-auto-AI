@@ -50,7 +50,8 @@ MEAL_TYPES_VERSION = "MEAL_TYPES_V1"
 # --- Среды исполнения ---------------------------------------------------------
 ENV_REAL = "REAL"
 ENV_DEMO = "DEMO"
-ENVIRONMENTS = {ENV_REAL, ENV_DEMO}
+ENV_OPEN = "OPEN"
+ENVIRONMENTS = {ENV_REAL, ENV_DEMO, ENV_OPEN}
 
 # --- Режимы решений ------------------------------------------------------------
 MODE_DEMO = "DEMO"

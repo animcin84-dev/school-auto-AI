@@ -33,7 +33,7 @@
 ориентиром для этапа эксплуатации и требует отдельного разрешения на установку).
 
 ```bash
-python3 -m unittest discover -s tests          # 215 тестов
+python3 -m unittest discover -s tests          # 226 тестов
 python3 -m sra gen-calibrated --dir data/demo-calibrated --seed 2026
                                                # откалиброванный SYNTHETIC v2:
                                                # порции по нормам РК, доли отходов
@@ -41,6 +41,10 @@ python3 -m sra gen-calibrated --dir data/demo-calibrated --seed 2026
                                                # (манифест происхождения каждого
                                                # параметра); см. docs/OPEN_DATA_PLAN.md
 python3 -m sra demo --dir data/demo --seed 42  # изолированное синтетическое демо + backtest прогнозов
+python3 -m sra import-open --db data/open/open.sqlite3 --environment open \
+    --dataset finland --file data/incoming/fi.xlsx
+                                               # чужие открытые данные (Zenodo)
+                                               # в изолированную OPEN-среду
 python3 -m sra forecast --db data/demo/demo.sqlite3 --environment demo \
   --school-id SCH-DEMO-001                     # backtest базовых прогнозов (этап 3)
 python3 -m sra optimize --db data/demo/demo.sqlite3 --environment demo \
@@ -59,7 +63,8 @@ python3 -m sra shadow-run --db data/demo/demo.sqlite3 --environment demo \
 ```
 
 Статус: каркас, демо, прогнозы, симуляционный оптимизатор, SHADOW-контур и
-объясняющий слой, откалиброванный генератор данных проверены автотестами (215); реальных
+объясняющий слой, откалиброванный генератор, импорт чужих открытых данных
+(OPEN-среда) проверены автотестами (226); реальных
 данных, обученных моделей, нормативов и одобрений в проекте НЕТ; при нехватке
 данных прогноз возвращает DATA_NOT_READY; реальное вмешательство заблокировано
 по построению (решение по умолчанию NO_CHANGE). Подробности — в
