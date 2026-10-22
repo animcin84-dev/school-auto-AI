@@ -26,6 +26,8 @@
   pilot-package — документы пилота для реальной школы (этап 5b)
   forecast-diners — backtest прогноза едоков (базовые vs ML-кандидаты)
   quality-check — контроль качества данных (+ кросс-чек с источником FI)
+  forecast-composite — композит (едоки × г/едока) vs прямой прогноз
+  import-map — импорт CSV по карте колонок (внешние выгрузки, вкл. Соцкошелёк)
   alerts — алерты питания (индекс несъедаемости vs порог нацстандарта РК)
 
 Отсутствие команды эксплуатации (реальное вмешательство) — намеренное:
@@ -263,6 +265,72 @@ def cmd_alerts(args) -> int:
         _print({"school_id": args.school_id,
                 "alerts": nutrition_alerts(store, args.school_id,
                                            uneaten_threshold_pct=args.threshold)})
+        return 0
+    finally:
+        store.close()
+
+
+def cmd_forecast_composite(args) -> int:
+    """Композитный прогноз (едоки × г/едока) vs прямой: MAE + стоимость решения."""
+    from sra.forecasting.composite import backtest_composite
+    store = EvidenceStore(args.db, args.environment)
+    try:
+        sessions = [s for s in store.fetch_sessions(school_id=args.school_id)
+                    if s.meal_type == args.meal_type]
+        observations = store.fetch_observations(school_id=args.school_id)
+        report = backtest_composite(sessions, observations, field=args.field,
+                                    test_days=args.test_days,
+                                    calib_days=args.calib_days,
+                                    c_w=args.c_w, c_s=args.c_s)
+        _print(report)
+        return 0 if report["status"] == "OK" else 2
+    finally:
+        store.close()
+
+
+def cmd_import_map(args) -> int:
+    """Импорт CSV внешнего источника по карте колонок (JSON).
+
+    Универсальный вход для выгрузок («Социальный кошелёк», школьные журналы):
+    карта соответствий пишется по фактическому образцу, догадок нет.
+    """
+    import csv as _csv
+    from sra.ingest.csv_map import load_map, parse_csv
+    from sra.validation import validate_observations, validate_sessions
+
+    mapping = load_map(args.map)
+    records, parse_report = parse_csv(args.file, mapping)
+    if parse_report["errors_total"]:
+        _print({"imported": 0, "parse": parse_report,
+                "note": "импорт не выполнен: есть ошибки разбора"})
+        return 2
+    if not records:
+        raise SraError("файл не содержит строк данных", code="E_NO_DATA_ROWS")
+    store = EvidenceStore(args.db, args.environment)
+    try:
+        if mapping["kind"] == "sessions":
+            v_rep = validate_sessions(records, existing_ids=store.session_ids())
+        else:
+            v_rep = validate_observations(
+                records, known_sessions=store.session_ids(),
+                existing_observation_ids=store.observation_ids(),
+                existing_pairs=store.observation_pairs())
+        if not v_rep.ok:
+            _print({"imported": 0, "rejected_reasons": [i.to_dict() for i in v_rep.errors],
+                    "warnings": [i.to_dict() for i in v_rep.warnings],
+                    "note": "импорт атомарен: батч с ошибками не записан"})
+            return 2
+        if mapping["kind"] == "sessions":
+            res = store.import_sessions(v_rep.accepted, actor=args.actor,
+                                        import_meta={"source_file": str(args.file),
+                                                     "map": str(args.map)})
+        else:
+            res = store.import_observations(v_rep.accepted, actor=args.actor,
+                                            import_meta={"source_file": str(args.file),
+                                                         "map": str(args.map)})
+        _print({"imported": res["imported"], "dataset_version": res["dataset_version"],
+                "warnings": [i.to_dict() for i in v_rep.warnings],
+                "parse": {"rows_total": parse_report["rows_total"]}})
         return 0
     finally:
         store.close()
@@ -700,6 +768,33 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--calib-days", type=int, default=20)
     sp.add_argument("--no-save-cards", action="store_true")
     sp.set_defaults(func=cmd_forecast_diners)
+
+    sp = sub.add_parser("forecast-composite",
+                        help="композит (едоки × г/едока) vs прямой прогноз: "
+                             "MAE + стоимость решения")
+    sp.add_argument("--db", required=True)
+    sp.add_argument("--environment", choices=sorted(enums.ENVIRONMENTS),
+                    default=enums.ENV_OPEN)
+    sp.add_argument("--school-id", required=True)
+    sp.add_argument("--meal-type", default="LUNCH")
+    sp.add_argument("--field", choices=["plate_waste_g", "served_mass_g"],
+                    default="plate_waste_g")
+    sp.add_argument("--test-days", type=int, default=20)
+    sp.add_argument("--calib-days", type=int, default=20)
+    sp.add_argument("--c-w", type=float, default=500.0)
+    sp.add_argument("--c-s", type=float, default=5000.0)
+    sp.set_defaults(func=cmd_forecast_composite)
+
+    sp = sub.add_parser("import-map",
+                        help="импорт CSV по карте колонок (JSON) — универсальный "
+                             "вход для внешних выгрузок")
+    sp.add_argument("--db", required=True)
+    sp.add_argument("--environment", choices=sorted(enums.ENVIRONMENTS),
+                    default=enums.ENV_OPEN)
+    sp.add_argument("--file", required=True, help="CSV внешнего источника")
+    sp.add_argument("--map", required=True, help="JSON-карта колонок")
+    sp.add_argument("--actor", default="csv-map-import")
+    sp.set_defaults(func=cmd_import_map)
 
     sp = sub.add_parser("quality-check",
                         help="качество данных школы (полнота, выбросы, календарь)")

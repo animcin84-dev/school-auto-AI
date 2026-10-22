@@ -35,7 +35,7 @@
 ориентиром для этапа эксплуатации и требует отдельного разрешения на установку).
 
 ```bash
-python3 -m unittest discover -s tests          # 258 тестов (и без, и со sklearn)
+python3 -m unittest discover -s tests          # 270 тестов (и без, и со sklearn)
 python3 -m sra gen-calibrated --dir data/demo-calibrated --seed 2026
                                                # откалиброванный SYNTHETIC v2:
                                                # порции по нормам РК, доли отходов
@@ -56,6 +56,13 @@ python3 -m sra forecast-diners --db data/open/open.sqlite3 --environment OPEN \
                                                # backtest прогноза едоков:
                                                # базовые правила vs ridge vs GBDT
                                                # (ML: scripts/setup-ml.sh)
+python3 -m sra forecast-composite --db data/open/open.sqlite3 --environment OPEN \
+    --school-id FI-ZEN-20825233
+                                               # композит (едоки × г/едока) vs
+                                               # прямой прогноз + стоимость решения
+python3 -m sra import-map --db data/open/open.sqlite3 --environment OPEN \
+    --file выгрузка.csv --map карта.json       # любой внешний CSV («Соцкошелёк»
+                                               # и др.) по явной карте колонок
 python3 -m sra quality-check --db data/open/open.sqlite3 --environment OPEN \
     --school-id FI-ZEN-20825233 --file "Food waste data school Finland 2024-2025.xlsx"
                                                # качество данных + кросс-чек
@@ -87,7 +94,8 @@ python3 -m sra shadow-run --db data/demo/demo.sqlite3 --environment demo \
 Статус: каркас, демо, прогнозы, симуляционный оптимизатор, SHADOW-контур и
 объясняющий слой, откалиброванный генератор, импорт чужих открытых данных
 (OPEN-среда), сравнение фаз, генератор пакета пилота, прогноз едоков с ML-кандидатами, контроль качества, KZ-календарь,
-алерты питания проверены автотестами (258); реальные открытые
+алерты питания, композитный прогноз, импорт по карте колонок
+проверены автотестами (270); реальные открытые
 датасеты Zenodo (Финляндия 155 дней, Латвия 4 школы) импортированы;
 см. docs/OPEN_DATA_PLAN.md. Реальных данных школы КЗ нет
 данных, обученных моделей, нормативов и одобрений в проекте НЕТ; при нехватке
