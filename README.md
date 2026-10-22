@@ -33,7 +33,13 @@
 ориентиром для этапа эксплуатации и требует отдельного разрешения на установку).
 
 ```bash
-python3 -m unittest discover -s tests          # 208 тестов
+python3 -m unittest discover -s tests          # 215 тестов
+python3 -m sra gen-calibrated --dir data/demo-calibrated --seed 2026
+                                               # откалиброванный SYNTHETIC v2:
+                                               # порции по нормам РК, доли отходов
+                                               # по опубликованным исследованиям
+                                               # (манифест происхождения каждого
+                                               # параметра); см. docs/OPEN_DATA_PLAN.md
 python3 -m sra demo --dir data/demo --seed 42  # изолированное синтетическое демо + backtest прогнозов
 python3 -m sra forecast --db data/demo/demo.sqlite3 --environment demo \
   --school-id SCH-DEMO-001                     # backtest базовых прогнозов (этап 3)
@@ -53,7 +59,7 @@ python3 -m sra shadow-run --db data/demo/demo.sqlite3 --environment demo \
 ```
 
 Статус: каркас, демо, прогнозы, симуляционный оптимизатор, SHADOW-контур и
-объясняющий слой проверены автотестами (208); реальных
+объясняющий слой, откалиброванный генератор данных проверены автотестами (215); реальных
 данных, обученных моделей, нормативов и одобрений в проекте НЕТ; при нехватке
 данных прогноз возвращает DATA_NOT_READY; реальное вмешательство заблокировано
 по построению (решение по умолчанию NO_CHANGE). Подробности — в

@@ -21,6 +21,7 @@
   selfcheck   — проверка инвариантов хранилища
   audit       — хвост журнала аудита
   demo        — изолированное синтетическое демо (DEMO-среда)
+  gen-calibrated — откалиброванный SYNTHETIC-генератор v2 (параметры из источников)
 
 Отсутствие команды эксплуатации (реальное вмешательство) — намеренное:
 условия перехода в OPERATIONAL не выполнены (см. docs/ARCHITECTURE_AND_GATES.md).
@@ -437,6 +438,30 @@ def cmd_audit(args) -> int:
         store.close()
 
 
+def cmd_gen_calibrated(args) -> int:
+    from sra.demo.calibrated import generate
+    manifest = generate(args.dir, seed=args.seed, n_days=args.days,
+                        start_date=args.start_date, enrollment=args.enrollment,
+                        mode_change_day=args.mode_change_day)
+    _print({
+        "data_nature": manifest["data_nature"],
+        "generator": manifest["generator"],
+        "school_id": manifest["school_id"],
+        "n_sessions": manifest["n_sessions"],
+        "n_observations": manifest["n_observations"],
+        "plate_waste_per_child_mean_g": manifest["plate_waste_per_child_mean_g"],
+        "calibration_classes": sorted({c["class"] for c in manifest["calibration"]}),
+        "files": [str(Path(args.dir) / f) for f in
+                  ("sessions.csv", "observations.csv", "manifest.json")],
+        "warning": manifest["warnings"][0],
+        "import_hint": ("python3 -m sra init-db --db <db> --environment demo && "
+                        "python3 -m sra import --db <db> --environment demo "
+                        "--kind sessions --file " + str(Path(args.dir) / "sessions.csv") +
+                        " --actor <оператор>"),
+    })
+    return 0
+
+
 def cmd_demo(args) -> int:
     from .demo.run import run_demo
     report = run_demo(args.dir, seed=args.seed, n_days=args.days, reset=args.reset)
@@ -657,6 +682,17 @@ def build_parser() -> argparse.ArgumentParser:
     db_args(sp)
     sp.add_argument("--tail", type=int, default=50)
     sp.set_defaults(func=cmd_audit)
+
+    sp = sub.add_parser("gen-calibrated",
+                        help="откалиброванный SYNTHETIC-генератор (источники в манифесте)")
+    sp.add_argument("--dir", default="data/demo-calibrated")
+    sp.add_argument("--seed", type=int, default=2026)
+    sp.add_argument("--days", type=int, default=90)
+    sp.add_argument("--start-date", default="2026-09-01")
+    sp.add_argument("--enrollment", type=int, default=120,
+                    help="контингент школы (допущение, см. манифест)")
+    sp.add_argument("--mode-change-day", type=int, default=45)
+    sp.set_defaults(func=cmd_gen_calibrated)
 
     sp = sub.add_parser("demo", help="изолированное синтетическое демо")
     sp.add_argument("--dir", default="data/demo")
