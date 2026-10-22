@@ -23,6 +23,7 @@
   demo        — изолированное синтетическое демо (DEMO-среда)
   gen-calibrated — откалиброванный SYNTHETIC-генератор v2 (параметры из источников)
   eval-compare — сравнение фаз BASELINE/INTERVENTION (разведочный анализ)
+  pilot-package — документы пилота для реальной школы (этап 5b)
 
 Отсутствие команды эксплуатации (реальное вмешательство) — намеренное:
 условия перехода в OPERATIONAL не выполнены (см. docs/ARCHITECTURE_AND_GATES.md).
@@ -184,6 +185,17 @@ def cmd_eval_compare(args) -> int:
         return 0 if report["status"] == "OK" else 2
     finally:
         store.close()
+
+
+def cmd_pilot_package(args) -> int:
+    """Генерирует пакет документов пилота (этап 5b) для реальной школы.
+
+    Документы создаются из кода: условия ворот всегда соответствуют
+    sra.phases.INTERVENTION_CONDITIONS. Требуют юридической сверки.
+    """
+    from sra.pilot.package import build_package
+    _print(build_package(args.out))
+    return 0
 
 
 def cmd_metrics(args) -> int:
@@ -616,6 +628,12 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--alpha", type=float, default=0.05)
     sp.add_argument("--power", type=float, default=0.80)
     sp.set_defaults(func=cmd_eval_compare)
+
+    sp = sub.add_parser("pilot-package",
+                        help="документы пилота для школы (согласие, протокол, "
+                             "чек-лист ворот, план эффекта, памятка NO_CHANGE)")
+    sp.add_argument("--out", default="docs/pilot-package")
+    sp.set_defaults(func=cmd_pilot_package)
 
     sp = sub.add_parser("init-db", help="создать хранилище")
     db_args(sp)
