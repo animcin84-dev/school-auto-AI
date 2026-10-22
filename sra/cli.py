@@ -24,6 +24,7 @@
   gen-calibrated — откалиброванный SYNTHETIC-генератор v2 (параметры из источников)
   eval-compare — сравнение фаз BASELINE/INTERVENTION (разведочный анализ)
   pilot-package — документы пилота для реальной школы (этап 5b)
+  forecast-diners — backtest прогноза едоков (базовые vs ML-кандидаты)
 
 Отсутствие команды эксплуатации (реальное вмешательство) — намеренное:
 условия перехода в OPERATIONAL не выполнены (см. docs/ARCHITECTURE_AND_GATES.md).
@@ -196,6 +197,40 @@ def cmd_pilot_package(args) -> int:
     from sra.pilot.package import build_package
     _print(build_package(args.out))
     return 0
+
+
+def cmd_forecast_diners(args) -> int:
+    """Backtest прогноза числа едоков: базовые правила vs ML-кандидаты.
+
+    Едоки — отдельная цель прогноза (спрос = едоки × г/едока); в КЗ наблюдаются
+    автоматически через «Социальный кошелёк». Выбор модели — по измеренному MAE.
+    """
+    from sra.forecasting.diners import backtest_diners
+    store = EvidenceStore(args.db, args.environment)
+    try:
+        sessions = [s for s in store.fetch_sessions(school_id=args.school_id)
+                    if s.meal_type == args.meal_type]
+        report = backtest_diners(sessions, test_days=args.test_days,
+                                 calib_days=args.calib_days)
+        if report["status"] == "OK" and not args.no_save_cards:
+            for m in report["models"]:
+                if m.get("status") != "OK":
+                    continue
+                store.save_model_card(
+                    model_id=f"sra.diners.{m['name']}", model_name=m["name"],
+                    params=m.get("params", {}),
+                    data_meta={"school_id": args.school_id,
+                               "meal_type": args.meal_type,
+                               "n_train": report["n_train"],
+                               "test_range": report["test_range"],
+                               "dataset_version": store.get_dataset_version()},
+                    metrics={"mae_diners": m.get("mae"),
+                             "interval": m.get("interval")})
+            report["model_cards_saved"] = True
+        _print(report)
+        return 0 if report["status"] == "OK" else 2
+    finally:
+        store.close()
 
 
 def cmd_metrics(args) -> int:
@@ -618,6 +653,18 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--out-dir", default=None,
                     help="куда писать CSV-копии (по умолчанию рядом с БД)")
     sp.set_defaults(func=cmd_import_open)
+
+    sp = sub.add_parser("forecast-diners",
+                        help="backtest прогноза едоков: базовые vs ML (ridge, sklearn GBDT)")
+    sp.add_argument("--db", required=True)
+    sp.add_argument("--environment", choices=sorted(enums.ENVIRONMENTS),
+                    default=enums.ENV_OPEN)
+    sp.add_argument("--school-id", required=True)
+    sp.add_argument("--meal-type", default="LUNCH")
+    sp.add_argument("--test-days", type=int, default=30)
+    sp.add_argument("--calib-days", type=int, default=20)
+    sp.add_argument("--no-save-cards", action="store_true")
+    sp.set_defaults(func=cmd_forecast_diners)
 
     sp = sub.add_parser("eval-compare",
                         help="сравнение фаз BASELINE/INTERVENTION (разведочный анализ)")

@@ -34,7 +34,7 @@
 ориентиром для этапа эксплуатации и требует отдельного разрешения на установку).
 
 ```bash
-python3 -m unittest discover -s tests          # 242 теста
+python3 -m unittest discover -s tests          # 250 тестов (и без, и со sklearn)
 python3 -m sra gen-calibrated --dir data/demo-calibrated --seed 2026
                                                # откалиброванный SYNTHETIC v2:
                                                # порции по нормам РК, доли отходов
@@ -50,6 +50,11 @@ python3 -m sra eval-compare --db data/open/open.sqlite3 --environment OPEN \
     --school-id FI-ZEN-20825233
                                                # сравнение фаз чужого вмешательства
                                                # (разведочно; причинность не заявляется)
+python3 -m sra forecast-diners --db data/open/open.sqlite3 --environment OPEN \
+    --school-id FI-ZEN-20825233
+                                               # backtest прогноза едоков:
+                                               # базовые правила vs ridge vs GBDT
+                                               # (ML: scripts/setup-ml.sh)
 python3 -m sra pilot-package --out docs/pilot-package
                                                # документы пилота для школы КЗ:
                                                # согласие, протокол измерений,
@@ -73,7 +78,7 @@ python3 -m sra shadow-run --db data/demo/demo.sqlite3 --environment demo \
 
 Статус: каркас, демо, прогнозы, симуляционный оптимизатор, SHADOW-контур и
 объясняющий слой, откалиброванный генератор, импорт чужих открытых данных
-(OPEN-среда), сравнение фаз, генератор пакета пилота проверены автотестами (242); реальные открытые
+(OPEN-среда), сравнение фаз, генератор пакета пилота, прогноз едоков с ML-кандидатами проверены автотестами (250); реальные открытые
 датасеты Zenodo (Финляндия 155 дней, Латвия 4 школы) импортированы;
 см. docs/OPEN_DATA_PLAN.md. Реальных данных школы КЗ нет
 данных, обученных моделей, нормативов и одобрений в проекте НЕТ; при нехватке
