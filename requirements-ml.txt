@@ -1,0 +1,3 @@
+# проверенная связка в песочнице: numpy 2.4.6, scikit-learn 1.9.1
+numpy>=1.26
+scikit-learn>=1.4
