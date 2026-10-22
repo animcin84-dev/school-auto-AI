@@ -36,6 +36,8 @@
   digest      — дайджест для директора/бракеражной комиссии (read-only)
   assistant-tools / assistant-call — read-only инструменты помощника
 Служебные:
+  gen-lifelike — учебный год SYNTHETIC, калиброванный по реальному FI
+  dashboard   — локальный read-only дашборд (127.0.0.1)
   selfcheck, audit, demo, gen-calibrated, pilot-package
 """
 
@@ -606,6 +608,30 @@ def cmd_rehearse_year(args) -> int:
     return 0
 
 
+def cmd_gen_lifelike(args) -> int:
+    """Lifelike-генератор: учебный год, калибровка шума по реальному FI."""
+    from sra.demo.lifelike import generate_lifelike
+    m = generate_lifelike(args.dir, fi_xlsx=args.fi_xlsx, seed=args.seed,
+                          enrollment=args.enrollment, start=args.start,
+                          end=args.end)
+    _print({"data_nature": m["data_nature"], "generator": m["generator"],
+            "school_id": m["school_id"], "school_year": m["school_year"],
+            "n_sessions": m["n_sessions"], "n_observations": m["n_observations"],
+            "stats": m["stats"],
+            "calibration_source": m["calibration_from_fi"]["source_ref"],
+            "menu_effect_share": m["calibration_from_fi"]["menu_effect_share"],
+            "dir": args.dir,
+            "note": "SYNTHETIC; калибровка шума по реальному открытому датасету"})
+    return 0
+
+
+def cmd_dashboard(args) -> int:
+    """Локальный read-only дашборд (bind по умолчанию 127.0.0.1)."""
+    from sra.dashboard import serve
+    serve(args.db, args.environment, port=args.port, bind=args.bind)
+    return 0
+
+
 def cmd_forecast(args) -> int:
     from sra.forecasting.backtest import run_backtest
     from sra.forecasting.series import make_snapshot_fn
@@ -1028,6 +1054,29 @@ def build_parser() -> argparse.ArgumentParser:
                     help="учебных дней (по умолчанию год ~170)")
     sp.add_argument("--enrollment", type=int, default=120)
     sp.set_defaults(func=cmd_rehearse_year)
+    sp = sub.add_parser("gen-lifelike",
+                        help="учебный год SYNTHETIC, калиброванный по "
+                             "реальному FI-датасету (требует --fi-xlsx)")
+    sp.add_argument("--dir", required=True)
+    sp.add_argument("--fi-xlsx", required=True,
+                    help="xlsx FI (Zenodo 20825233) для оценки параметров шума")
+    sp.add_argument("--seed", type=int, default=2026)
+    sp.add_argument("--enrollment", type=int, default=120)
+    sp.add_argument("--start", default="2025-09-01")
+    sp.add_argument("--end", default="2026-05-25")
+    sp.set_defaults(func=cmd_gen_lifelike)
+
+    sp = sub.add_parser("dashboard",
+                        help="локальный read-only дашборд (digest/ML/качество/"
+                             "нормы/алерты); bind 127.0.0.1 по правилу репозитория")
+    sp.add_argument("--db", required=True)
+    sp.add_argument("--environment", choices=sorted(enums.ENVIRONMENTS),
+                    default=enums.ENV_OPEN)
+    sp.add_argument("--port", type=int, default=8765)
+    sp.add_argument("--bind", default="127.0.0.1",
+                    help="адрес привязки (по умолчанию 127.0.0.1 — не "
+                         "выставлять наружу; смена — осознанное решение)")
+    sp.set_defaults(func=cmd_dashboard)
 
     sp = sub.add_parser("import-map",
                         help="импорт CSV по карте колонок (JSON) — универсальный "
