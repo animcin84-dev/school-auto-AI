@@ -15,6 +15,9 @@
   shadow-run  — SHADOW-контур: симуляционные предложения по окну дней без исполнения
   monitor     — мониторинг качества прогнозов по shadow-записям
   design      — проект плана оценки эффекта (требуемый объём выборки)
+  explain     — детерминированное русскоязычное объяснение статуса школы
+  assistant-tools  — список разрешённых read-only инструментов помощника
+  assistant-call   — вызов инструмента помощника (валидация, изоляция, аудит)
   selfcheck   — проверка инвариантов хранилища
   audit       — хвост журнала аудита
   demo        — изолированное синтетическое демо (DEMO-среда)
@@ -364,6 +367,56 @@ def cmd_design(args) -> int:
         store.close()
 
 
+def cmd_explain(args) -> int:
+    from sra.assistant.tools import call_tool
+    from sra.explain import explain_school_overview
+    store = EvidenceStore(args.db, args.environment)
+    try:
+        policies = PolicyRegistry(store)
+        result = call_tool(store, policies, "school_overview",
+                           {"school_id": args.school_id, "meal_type": args.meal_type},
+                           actor=args.actor)
+        if not result["ok"]:
+            _print(result["refusal"])
+            return 2
+        print(explain_school_overview(result["facts"]))
+        return 0
+    finally:
+        store.close()
+
+
+def cmd_assistant_tools(args) -> int:
+    from sra.assistant.tools import ARG_SPEC, TOOL_DESCRIPTIONS
+    _print({name: {"description": TOOL_DESCRIPTIONS.get(name, ""),
+                   "args": {k: {"type": v[0].__name__, "required": v[1],
+                                "default": v[2]} for k, v in spec.items()}}
+            for name, spec in ARG_SPEC.items()})
+    return 0
+
+
+def cmd_assistant_call(args) -> int:
+    from sra.assistant.context import build_context
+    from sra.assistant.tools import call_tool
+    try:
+        tool_args = json.loads(args.args) if args.args else {}
+    except json.JSONDecodeError as e:
+        _print({"error": {"code": "E_CLI_ARGS", "message": f"args не JSON: {e}"}})
+        return 2
+    store = EvidenceStore(args.db, args.environment)
+    try:
+        policies = PolicyRegistry(store)
+        result = call_tool(store, policies, args.tool,
+                           {"school_id": args.school_id, **tool_args},
+                           actor=args.actor)
+        if result["ok"] and args.with_context:
+            _print(build_context(result["facts"], purpose=args.with_context))
+        else:
+            _print(result)
+        return 0 if result["ok"] else 2
+    finally:
+        store.close()
+
+
 def cmd_selfcheck(args) -> int:
     store = EvidenceStore(args.db, args.environment)
     try:
@@ -406,6 +459,8 @@ def cmd_demo(args) -> int:
                    if k in report["shadow"]},
         "monitoring_status": report.get("monitoring", {}).get("status"),
         "evaluation_plan_status": report.get("evaluation_plan", {}).get("status"),
+        "explanation_first_line": (report.get("explanation", "").splitlines() or [""])[0],
+        "explanation_lines": len(report.get("explanation", "").splitlines()),
         "selfcheck_ok": all(r["ok"] for r in report["selfcheck"]),
         "report_file": str(Path(args.dir) / "demo_report.json"),
     })
@@ -573,6 +628,26 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--days-per-week", type=int, default=5)
     sp.add_argument("--min-records", type=int, default=8)
     sp.set_defaults(func=cmd_design)
+
+    sp = sub.add_parser("explain", help="объяснение статуса школы (детерминированный текст)")
+    db_args(sp)
+    sp.add_argument("--school-id", required=True)
+    sp.add_argument("--meal-type", default="LUNCH")
+    sp.add_argument("--actor", default="assistant")
+    sp.set_defaults(func=cmd_explain)
+
+    sp = sub.add_parser("assistant-tools", help="список разрешённых инструментов помощника")
+    sp.set_defaults(func=cmd_assistant_tools)
+
+    sp = sub.add_parser("assistant-call", help="вызов инструмента помощника")
+    db_args(sp)
+    sp.add_argument("--tool", required=True)
+    sp.add_argument("--school-id", required=True)
+    sp.add_argument("--args", default=None, help="JSON остальных аргументов")
+    sp.add_argument("--actor", default="assistant")
+    sp.add_argument("--with-context", metavar="PURPOSE", default=None,
+                    help="дополнительно собрать безопасный контекст для будущего LLM")
+    sp.set_defaults(func=cmd_assistant_call)
 
     sp = sub.add_parser("selfcheck", help="проверка инвариантов хранилища")
     db_args(sp)

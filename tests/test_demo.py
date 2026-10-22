@@ -207,6 +207,22 @@ class TestCliSmoke(unittest.TestCase):
                        "--environment", "demo"])
         self.assertEqual(rc, 0)
 
+    def test_explain_and_assistant_cli(self):
+        demo_dir = self.tmp / "demo-explain"
+        cli_main(["demo", "--dir", str(demo_dir), "--seed", "42", "--days", "60"])
+        rc = cli_main(["explain", "--db", str(demo_dir / "demo.sqlite3"),
+                       "--environment", "demo", "--school-id", "SCH-DEMO-001"])
+        self.assertEqual(rc, 0)
+        rc = cli_main(["assistant-call", "--db", str(demo_dir / "demo.sqlite3"),
+                       "--environment", "demo", "--tool", "phase_status",
+                       "--school-id", "SCH-DEMO-001"])
+        self.assertEqual(rc, 0)
+        # отказ -> код 2
+        rc = cli_main(["assistant-call", "--db", str(demo_dir / "demo.sqlite3"),
+                       "--environment", "demo", "--tool", "school_overview",
+                       "--school-id", "SCH-NOPE"])
+        self.assertEqual(rc, 2)
+
     def test_demo_full_path_reaches_shadow(self):
         demo_dir = self.tmp / "demo-long"
         rc = cli_main(["demo", "--dir", str(demo_dir), "--seed", "42", "--days", "60"])

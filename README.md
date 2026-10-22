@@ -22,6 +22,7 @@
 - [docs/PHASE3.md](docs/PHASE3.md) — отчёт по этапу 3: базовые прогнозы, хронологический backtest, интервалы, дрейф.
 - [docs/PHASE4.md](docs/PHASE4.md) — отчёт по этапу 4: симуляционный оптимизатор, жёсткие ограничения, согласования версий, сравнение стратегий.
 - [docs/PHASE5.md](docs/PHASE5.md) — отчёт по этапу 5а: фазы исследования, SHADOW-контур, мониторинг, дизайн оценки.
+- [docs/PHASE6.md](docs/PHASE6.md) — отчёт по этапу 6: детерминированные объяснения, ограниченные read-only инструменты помощника (без LLM).
 - [AGENTS.md](AGENTS.md) — обязательные правила для ИИ, работающего в этом репозитории.
 - [templates/sessions.csv](templates/sessions.csv) и [templates/observations.csv](templates/observations.csv) — пустые шаблоны, не результаты школы.
 
@@ -32,7 +33,7 @@
 ориентиром для этапа эксплуатации и требует отдельного разрешения на установку).
 
 ```bash
-python3 -m unittest discover -s tests          # 121 тест
+python3 -m unittest discover -s tests          # 208 тестов
 python3 -m sra demo --dir data/demo --seed 42  # изолированное синтетическое демо + backtest прогнозов
 python3 -m sra forecast --db data/demo/demo.sqlite3 --environment demo \
   --school-id SCH-DEMO-001                     # backtest базовых прогнозов (этап 3)
@@ -42,14 +43,17 @@ python3 -m sra optimize --db data/demo/demo.sqlite3 --environment demo \
 python3 -m sra --help                          # все команды (init-db, import, metrics, verify,
                                                # revise, policies, decide, forecast, optimize,
                                                # compare, phase, shadow-run, monitor,
-                                               # design, selfcheck, audit)
+                                               # design, explain, assistant-tools,
+                                               # assistant-call, selfcheck, audit)
+python3 -m sra explain --db data/demo/demo.sqlite3 --environment demo \
+  --school-id SCH-DEMO-001                     # русский отчёт-объяснение (без LLM)
 python3 -m sra shadow-run --db data/demo/demo.sqlite3 --environment demo \
   --school-id SCH-DEMO-001 --policy-id POLICY-DEMO-OPT-001 \
   --days 10                                    # SHADOW-контур без исполнения (этап 5а)
 ```
 
-Статус: каркас, демо, прогнозы, симуляционный оптимизатор и SHADOW-контур
-проверены автотестами (177); реальных
+Статус: каркас, демо, прогнозы, симуляционный оптимизатор, SHADOW-контур и
+объясняющий слой проверены автотестами (208); реальных
 данных, обученных моделей, нормативов и одобрений в проекте НЕТ; при нехватке
 данных прогноз возвращает DATA_NOT_READY; реальное вмешательство заблокировано
 по построению (решение по умолчанию NO_CHANGE). Подробности — в

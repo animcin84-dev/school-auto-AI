@@ -204,6 +204,15 @@ def run_demo(out_dir: str | Path = "data/demo", *, seed: int = 42, n_days: int =
         evaluation_plan = {"status": enums.DATA_NOT_READY,
                            "reason": "shadow-дней с прогнозом и фактом меньше 8"}
 
+    # 7d. Объясняющий слой (этап 6): детерминированный русский текст из фактов
+    # через ограниченные read-only инструменты помощника. LLM не вызывается.
+    from ..assistant.tools import call_tool
+    from ..explain import explain_school_overview
+    overview = call_tool(store, policies, "school_overview",
+                         {"school_id": school, "meal_type": "LUNCH"}, actor="demo")
+    explanation = (explain_school_overview(overview["facts"])
+                   if overview["ok"] else f"объяснение недоступно: {overview['refusal']}")
+
     # 8. Самопроверка инвариантов хранилища.
     selfcheck = store.selfcheck()
 
@@ -229,6 +238,7 @@ def run_demo(out_dir: str | Path = "data/demo", *, seed: int = 42, n_days: int =
         "shadow": shadow_report,
         "monitoring": monitoring_report,
         "evaluation_plan": evaluation_plan,
+        "explanation": explanation,
         "selfcheck": selfcheck,
     }
     (out / "demo_report.json").write_text(
