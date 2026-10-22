@@ -36,15 +36,28 @@ DEFAULT_CONFIG = {
 
 
 def load_calendar(path=None) -> dict:
-    """Конфиг календаря: JSON-файл или значения по умолчанию."""
+    """Конфиг календаря: явный путь → SRA_KZ_CALENDAR → data/kz-calendar.json
+    (ближайший существующий вверх от cwd) → значения по умолчанию."""
+    if path is None:
+        import os
+        path = os.environ.get("SRA_KZ_CALENDAR")
+    if path is None:
+        p = Path.cwd()
+        for cand in [p / "data" / "kz-calendar.json"] +                 [pp / "data" / "kz-calendar.json" for pp in p.parents]:
+            if cand.exists():
+                path = cand
+                break
     if path is not None:
         p = Path(path)
         if p.exists():
             cfg = json.loads(p.read_text(encoding="utf-8"))
             cfg.setdefault("note", DEFAULT_CONFIG["note"])
+            cfg["_source"] = str(p)
             return cfg
         raise FileNotFoundError(f"файл календаря не найден: {p}")
-    return dict(DEFAULT_CONFIG)
+    cfg = dict(DEFAULT_CONFIG)
+    cfg["_source"] = "defaults (файл конфига не найден; даты ОРИЕНТИРОВОЧНЫЕ)"
+    return cfg
 
 
 def _md(d: date) -> str:

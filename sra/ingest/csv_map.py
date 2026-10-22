@@ -138,6 +138,15 @@ def parse_csv(path, m: dict) -> tuple[list, dict]:
     derive = m.get("derive") or {}
     import_now = datetime.now(timezone.utc)
     records, errors = [], []
+    warnings: list[dict] = []
+    if "observed_at" in (m.get("derive") or {}) and \
+            "timezone" not in (m.get("columns") or {}) and \
+            "timezone" not in (m.get("constants") or {}):
+        warnings.append({
+            "code": "W_DERIVE_UTC_FALLBACK",
+            "message": "derive.observed_at: зона не задана картой — используется UTC; "
+                       "добавьте константу timezone (например Asia/Almaty)",
+        })
     delimiter = (m.get("options") or {}).get("delimiter", ",")
     if len(delimiter) != 1:
         raise ValidationError("options.delimiter должен быть одним символом",
@@ -223,6 +232,7 @@ def parse_csv(path, m: dict) -> tuple[list, dict]:
                 errors.append({"row": rn, "code": e.code, "message": str(e)})
     return records, {"kind": kind, "rows_total": len(records) + len(errors),
                      "rows_parsed": len(records),
+                     "warnings": warnings,
                      "errors": errors[:50],
                      "errors_total": len(errors),
                      "note": "батч атомарен: при наличии ошибок импорт не выполняется"}

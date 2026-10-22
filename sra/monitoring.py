@@ -80,7 +80,8 @@ def monitor_shadow(store, school_id: str, meal_type: str,
 
 
 def nutrition_alerts(store, school_id: str, *,
-                     uneaten_threshold_pct: float = 30.0) -> list[dict]:
+                     uneaten_threshold_pct: float = 30.0,
+                     meal_type: str = "LUNCH") -> list[dict]:
     """Алерты по питанию на основе метрик (этап: план P0-4).
 
     Порог 30% — из нацстандарта РК 2025: если более 30% блюд остаются
@@ -89,8 +90,10 @@ def nutrition_alerts(store, school_id: str, *,
     возвращается элемент с status=UNAVAILABLE и причиной.
     """
     from .metrics import build_metric_report
-    sessions = store.fetch_sessions(school_id=school_id)
-    observations = store.fetch_observations(school_id=school_id)
+    sessions = [s for s in store.fetch_sessions(school_id=school_id)
+                if s.meal_type == meal_type]
+    observations = [o for o in store.fetch_observations(school_id=school_id)
+                    if o.session_id in {s.session_id for s in sessions}]
     rep = build_metric_report(sessions, observations)
     alerts: list[dict] = []
     ui = next((m for m in rep["metrics"] if m["name"] == "UneatenIndex"), None)

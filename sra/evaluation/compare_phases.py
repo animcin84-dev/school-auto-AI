@@ -57,9 +57,10 @@ def compare_phases(store, school_id: str, *, alpha: float = 0.05,
     other_phases: dict[str, int] = {}
     for s in sessions:
         pw = obs_by_session.get(s.session_id)
-        if pw is None or not s.attendance_count or s.attendance_count <= 0:
+        diners = s.attendance_count or s.meals_served  # как в diners.py
+        if pw is None or not diners or diners <= 0:
             continue
-        per_diner = pw / s.attendance_count
+        per_diner = pw / diners
         menu_id = None
         if s.notes:
             m = _MENU_RE.search(s.notes)
@@ -68,7 +69,7 @@ def compare_phases(store, school_id: str, *, alpha: float = 0.05,
         if s.study_phase in phases_points:
             phases_points[s.study_phase].append(per_diner)
             phase_sums[s.study_phase]["pw_g"] += pw
-            phase_sums[s.study_phase]["diners"] += s.attendance_count
+            phase_sums[s.study_phase]["diners"] += diners
             phase_sums[s.study_phase]["days"] += 1
             if menu_id:
                 menu_values.setdefault((s.study_phase, menu_id), []).append(per_diner)
