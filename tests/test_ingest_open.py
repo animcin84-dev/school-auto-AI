@@ -1,11 +1,9 @@
 """Импорт чужих открытых данных (Zenodo) в OPEN-среду.
 
-Реальные файлы Zenodo в песочнице недоступны (сеть ограничена), поэтому
-фикстуры xlsx строятся мини-писателем по ЗАДОКУМЕНТИРОВАННОЙ структуре
-записей (описание + Read_me на Zenodo). Заголовки шапки реальных файлов
-могут отличаться: адаптеры tolerant к вариантам имён, печатают header_raw
-в отчёте, а нераспознанные строки честно пропускают с причиной. При
-получении настоящих файлов отчёт покажет расхождения немедленно.
+Фикстуры xlsx строятся мини-писателем по ФАКТИЧЕСКОЙ структуре реальных
+файлов (md5 финского файла сверен с Zenodo: 3f7e610fedc1810f7e8bc1bd47103ee7;
+структура латвийского — листы School 1..4 с дневными блоками). Реальные
+файлы лежат в корне репозитория и импортируются той же командой import-open.
 """
 
 import shutil
@@ -14,11 +12,10 @@ import unittest
 import zipfile
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from xml.etree import ElementTree as ET
 from xml.sax.saxutils import escape
 
 from sra import enums
-from sra.errors import GuardError, SraError
+from sra.errors import GuardError
 from sra.ingest import xlsx_min, zenodo_fi, zenodo_lv
 from sra.optimizer.propose import propose_adjustment
 from sra.store import EvidenceStore
@@ -101,30 +98,57 @@ def write_xlsx(path: Path, sheets: dict[str, list[list]]) -> Path:
     return path
 
 
+# --- Фикстуры по ФАКТИЧЕСКОЙ структуре файлов --------------------------------
+
 def _fi_rows():
-    """Фикстура по документированным переменным записи (PW/PW-per/KSW/DINERS/MENU)."""
-    header = ["Date", "PW", "PW/g/diner", "KSW", "KSW/g/diner", "DINERS", "MENU"]
+    """Шапка реального файла: DATE (сериал), MENU, KSW kg, PW kg, PW g, DINERS..."""
+    header = ["DATE", "MENU", "KSW kg", "PW kg", "PW g", "DINERS",
+              "PW/g/diner", "KSW/g/diner"]
     rows = [header]
-    d0 = date(2024, 8, 12)  # понедельник
+    serial0 = 45512  # 2024-08-12
     for i in range(12):
-        d = d0 + timedelta(days=i)
-        rows.append([d.isoformat(), 5.5 + i * 0.1, 40.0 + i, 7.2 + i * 0.05,
-                     52.0 + i, 137 + i * 2, (i % 25) + 1])
+        rows.append([serial0 + i, (i % 25) + 1, 7.2 + i * 0.05, 5.5 + i * 0.1,
+                     5500 + i * 100, 137 + i * 2, 40.0 + i, 52.0 + i])
+    rows.append([None] * 8)            # пустая строка посреди данных
+    rows.append(["не дата", 3, 7.0, 5.0, 5000, 130, 38.0, 51.0])  # битая дата
+    rows.append([45530, 5, 7.4, None, None, 140, 39.0, 53.0])     # нет PW (kg и g)
     return rows
 
 
-def _lv_rows():
-    """Фикстура по Read_me записи: агрегаты по школам/группам."""
-    header = ["School_ID", "Measurement_period", "Student_group", "School_level",
-              "Age_group", "Meal_type", "Served_food_g", "Plate_waste_g"]
-    rows = [header]
-    for school in ("S1", "S2"):
-        for day in ("2023-12-04", "2023-12-05"):
-            for group, level in (("Grades 1-4", "primary"), ("Grades 5-7", "lower secondary")):
-                rows.append([school, day, group, level, "7-13", "lunch",
-                             48000 + hash((school, day, group)) % 900,
-                             9000 + hash((group, day)) % 700])
+def _lv_school_rows(days: list[tuple[str, str, list[tuple[str, float, float]]]]):
+    rows = [[f"SCHOOL X"], ["Food category",
+                            "Actual number of students who participated",
+                            "Food served\n(total, g)", "Plate Waste (total, g)"]]
+    for day_name, participants, dishes in days:
+        rows.append([day_name, participants])
+        for dish, served, waste in dishes:
+            rows.append([dish, served, waste])
+        wd = day_name.split()[0]
+        served_total = sum(s for _n, s, _w in dishes)
+        waste_total = sum(w for _n, _s, w in dishes)
+        rows.append([f"{wd} total", served_total, waste_total])
+    rows.append([])
+    rows.append(["Grades 1-4", "Grades 5-7", "S total"])
+    rows.append(["Plate waste per 1 student (g)", 50.4, 41.2, 46.5])
     return rows
+
+
+def _lv_sheets():
+    meta = [[None, None], ["Title", "Filtered Plate Waste ..."],
+            ["Term of use/license", "CC BY 4.0"]]
+    school1 = _lv_school_rows([
+        ("Monday lunch (December 11, 2023)", 324,
+         [("Pork goulash", 32400, 7163), ("Pasta", 42120, 8148),
+          ("Cinnamon roll", 19440, 76)]),
+        ("Tuesday lunch (December 12, 2023)", 331,
+         [("Pork cutlet", 16550, 2103), ("Mashed potatoes", 43030, 11112)]),
+    ])
+    school2 = _lv_school_rows([
+        ("Monday lunch (December 11, 2023)", 298,
+         [("Pork goulash", 31900, 4569), ("Pasta", 41470, 7334)]),
+    ])
+    return {"Meta-data": meta, "School 1": school1,
+            "School 2": school2, "Notes": [["что-то иное"]]}
 
 
 class OpenDataTestBase(unittest.TestCase):
@@ -154,7 +178,7 @@ class TestXlsxMin(OpenDataTestBase):
         self.assertEqual(r[1][2], 1.5)
         self.assertTrue(r[1][3])
         self.assertFalse(r[2][3])
-        # пустые ячейки → None (не ноль!)
+        # пустые ячейки паддятся до ширины листа → None (не ноль!)
         self.assertIsNone(r[3][1])
         self.assertIsNone(r[3][2])
 
@@ -165,7 +189,7 @@ class TestXlsxMin(OpenDataTestBase):
                             ("2023-12", date(2023, 12, 1))):
             self.assertEqual(xlsx_min.parse_any_date(v), expected, msg=v)
         self.assertIsNone(xlsx_min.parse_any_date("не дата"))
-        self.assertIsNone(xlsx_min.parse_any_date(42))  # число вне серийного диапазона
+        self.assertIsNone(xlsx_min.parse_any_date(42))  # вне серийного диапазона
         self.assertIsNone(xlsx_min.parse_any_date(None))
 
 
@@ -173,19 +197,21 @@ class TestFinlandAdapter(OpenDataTestBase):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
-        from datetime import timezone as tz
         path = write_xlsx(cls.tmp / "fi.xlsx", {"Data": _fi_rows()})
         cls.mapped = zenodo_fi.map_workbook(
             xlsx_min.read_workbook(path),
-            recorded_at=datetime(2026, 10, 22, 12, 0, tzinfo=tz.utc))
+            recorded_at=datetime(2026, 10, 22, 12, 0, tzinfo=timezone.utc))
 
     def test_mapping_and_status(self):
         m = self.mapped
-        self.assertEqual(m["report"]["matched_columns"]["pw"],
-                         _fi_rows()[0].index("PW"))
+        self.assertEqual(m["report"]["header_raw"][:2], ["DATE", "MENU"])
+        # 14 строк данных: 12 валидных + битая дата + нет PW
         self.assertEqual(m["report"]["rows_imported"], 12)
-        self.assertEqual(len(m["sessions"]), 12)
+        self.assertEqual(len(m["report"]["rows_skipped"]), 2)
+        self.assertEqual([s["reason"] for s in m["report"]["rows_skipped"]],
+                         ["дата не распознана", "PW нет числа: kg=None, g=None"])
         s = m["sessions"][0]
+        self.assertEqual(s.service_date, date(2024, 8, 8))  # из серийника 45512
         self.assertEqual(s.evidence_status, enums.REAL_OBSERVED)
         self.assertEqual(s.source_ref, "zenodo:20825233:v1")
         self.assertEqual(s.school_id, "FI-ZEN-20825233")
@@ -198,70 +224,98 @@ class TestFinlandAdapter(OpenDataTestBase):
         self.assertIn("MENU=1", s.notes)
         o = m["observations"][0]
         self.assertEqual(o.dish_id, "ALL")
-        self.assertAlmostEqual(o.plate_waste_g, 5500.0)
+        self.assertAlmostEqual(o.plate_waste_g, 5500.0)  # взято из PW g
         self.assertIsNone(o.served_mass_g)
         self.assertIsNone(o.prepared_mass_g)
-        self.assertIn("ksw", m["report"]["matched_columns"])
+        self.assertIn("pw_g", m["report"]["matched_columns"])
         self.assertTrue(any("KSW" in lim for lim in m["report"]["limitations"]))
-        self.assertEqual(m["report"]["rows_skipped"], [])
 
     def test_phase_rule_by_position(self):
         phases = {s.study_phase for s in self.mapped["sessions"]}
         self.assertEqual(phases, {enums.PHASE_BASELINE})  # 12 строк < 135 → baseline
 
-    def test_skips_bad_rows_honestly(self):
+    def test_kg_gram_crosscheck(self):
         rows = _fi_rows()
-        rows.append(["не дата", 5.0, 40.0, 7.0, 52.0, 130, 3])
-        rows.append(["2024-08-30", "мусор", 40.0, 7.0, 52.0, 130, 4])
-        path = write_xlsx(self.tmp / "fi_bad.xlsx", {"Data": rows})
-        m = zenodo_fi.map_workbook(xlsx_min.read_workbook(path),
-                                   recorded_at=datetime.now(timezone.utc))
-        self.assertEqual(m["report"]["rows_imported"], 12)
-        self.assertEqual(len(m["report"]["rows_skipped"]), 2)
-        self.assertEqual(m["report"]["rows_skipped"][0]["reason"], "дата не распознана")
+        rows[1] = [45512, 1, 7.2, 5.5, 5700, 137, 40.0, 52.0]  # 5.5kg != 5700g
+        path = write_xlsx(self.tmp / "fi_x.xlsx", {"Data": rows})
+        m = zenodo_fi.map_workbook(xlsx_min.read_workbook(path))
+        self.assertEqual(len(m["report"]["crosscheck_warnings"]), 1)
+        self.assertIn("!= PW g", m["report"]["crosscheck_warnings"][0]["detail"])
 
 
 class TestLatviaAdapter(OpenDataTestBase):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
-        path = write_xlsx(cls.tmp / "lv.xlsx", {"Sheet1": _lv_rows()})
-        from datetime import timezone as tz
+        path = write_xlsx(cls.tmp / "lv.xlsx", _lv_sheets())
         cls.mapped = zenodo_lv.map_workbook(
             xlsx_min.read_workbook(path),
-            recorded_at=datetime(2026, 10, 22, 12, 0, tzinfo=tz.utc))
+            recorded_at=datetime(2026, 10, 22, 12, 0, tzinfo=timezone.utc))
 
-    def test_mapping_school_group_split(self):
+    def test_mapping_schools_days_dishes(self):
         m = self.mapped
-        self.assertEqual(m["report"]["rows_imported"], 8)
-        # 2 школы × 2 дня = 4 сессии; наблюдение = строка (школа×день×группа)
-        self.assertEqual(len(m["sessions"]), 4)
-        self.assertEqual(len(m["observations"]), 8)
-        s = m["sessions"][0]
+        self.assertEqual(m["report"]["license"], "CC BY 4.0 (лист Meta-data файла и Read_me записи)")
+        # School 1: 2 дня × 3+2 блюда; School 2: 1 день × 2 блюда
+        self.assertEqual(m["report"]["rows_imported"], 7)
+        self.assertEqual(len(m["sessions"]), 3)
+        self.assertIn("Notes", m["report"]["sheets_seen"])
+        self.assertEqual(m["report"]["rows_skipped"],
+                         [{"sheet": "Notes", "reason": "лист не School N и не Meta-data"}])
+        by_school = {}
+        for s in m["sessions"]:
+            by_school.setdefault(s.school_id, []).append(s)
+        self.assertEqual(sorted(by_school),
+                         ["LV-ZEN-18441715-S1", "LV-ZEN-18441715-S2"])
+        s = by_school["LV-ZEN-18441715-S1"][0]
+        self.assertEqual(s.service_date, date(2023, 12, 11))
+        self.assertEqual(s.attendance_count, 324)
         self.assertEqual(s.evidence_status, enums.REAL_OBSERVED)
         self.assertEqual(s.source_ref, "zenodo:18441715:v1")
-        self.assertTrue(s.school_id.startswith("LV-ZEN-18441715-S"))
         self.assertEqual(s.timezone, "Europe/Riga")
-        groups = {o.dish_id for o in m["observations"]}
-        self.assertEqual(groups, {"PRE-SERVED-Grades-1-4", "PRE-SERVED-Grades-5-7"})
-        self.assertEqual(len(m["observations"]), 8)
-        o = m["observations"][0]
-        self.assertGreater(o.plate_waste_g, 0)
+        self.assertIsNone(s.meals_served)  # число порций не следует из файла
+        dishes = sorted(o.dish_id for o in m["observations"])
+        self.assertEqual(dishes, sorted(["Pork goulash", "Pasta", "Cinnamon roll",
+                                         "Pork cutlet", "Mashed potatoes",
+                                         "Pork goulash", "Pasta"]))
+        self.assertEqual(len([d for d in dishes if d == "Pork goulash"]), 2)
+        o = next(o for o in m["observations"] if o.dish_id == "Cinnamon roll")
+        self.assertEqual(o.plate_waste_g, 76)
+        self.assertEqual(o.served_mass_g, 19440)
         self.assertIsNone(o.prepared_mass_g)
-        self.assertIn("CC BY 4.0", m["report"]["license"])
-        # дневные даты не должны получить флаг месячного агрегата
-        self.assertFalse(any("PERIOD_AGGREGATE_AS_DATE" in s.quality_flags
-                             for s in m["sessions"]))
+        self.assertTrue(any("Grades" in note or "не импортируется"
+                            for note in [m["report"]["summary_block_note"]]))
+        self.assertIn("CC BY 4.0", str(m["report"]["meta_excerpt"]))
 
-    def test_month_period_marks_assumption(self):
-        rows = _lv_rows()
-        for r in rows[1:]:
-            r[1] = "December 2023"
-        path = write_xlsx(self.tmp / "lv_month.xlsx", {"Sheet1": rows})
+    def test_total_mismatch_reported(self):
+        sheets = _lv_sheets()
+        sheets["School 1"][6] = ["Monday total", 99999, 15387]  # неверный итог served
+        path = write_xlsx(self.tmp / "lv_bad.xlsx", sheets)
         m = zenodo_lv.map_workbook(xlsx_min.read_workbook(path))
-        flags = [f for s in m["sessions"] for f in s.quality_flags]
-        self.assertIn("PERIOD_AGGREGATE_AS_DATE", flags)
-        self.assertTrue(any("первый день периода" in s.notes for s in m["sessions"]))
+        self.assertTrue(any("served в файле 99999" in w["detail"]
+                            for w in m["report"]["crosscheck_warnings"]))
+
+
+class TestOnRealFiles(OpenDataTestBase):
+    """Реальные файлы в корне репозитория (загружены пользователем, md5 FI
+    сверен с Zenodo). Адаптеры обязаны переварить их без ошибок; ассерты
+    только структурные — значения меняют отчёт, а не корректность кода."""
+
+    def test_real_files_parse(self):
+        fi = Path("Food waste data school Finland 2024-2025.xlsx")
+        lv = Path("Plate_waste_december_2023.xlsx")
+        if not fi.exists() or not lv.exists():
+            self.skipTest("реальные файлы отсутствуют в рабочей копии")
+        m_fi = zenodo_fi.map_workbook(xlsx_min.read_workbook(fi))
+        self.assertEqual(m_fi["report"]["rows_imported"], 155)
+        self.assertEqual(len(m_fi["sessions"]), 155)
+        self.assertEqual({s.study_phase for s in m_fi["sessions"]},
+                         {enums.PHASE_BASELINE, enums.PHASE_INTERVENTION})
+        self.assertEqual(m_fi["report"]["rows_skipped"], [])
+        m_lv = zenodo_lv.map_workbook(xlsx_min.read_workbook(lv))
+        self.assertEqual(len(m_lv["sessions"]), 20)   # 4 школы × 5 дней
+        self.assertGreater(m_lv["report"]["rows_imported"], 50)
+        for s in m_lv["sessions"]:
+            self.assertGreaterEqual(s.attendance_count, 200)
 
 
 class TestOpenEnvironment(OpenDataTestBase):
@@ -272,9 +326,9 @@ class TestOpenEnvironment(OpenDataTestBase):
         store = EvidenceStore(self.db, enums.ENV_OPEN)
         try:
             path = write_xlsx(self.tmp / "fi_import.xlsx", {"Data": _fi_rows()})
-            from datetime import timezone as tz
-            m = zenodo_fi.map_workbook(xlsx_min.read_workbook(path),
-                                       recorded_at=datetime(2026, 10, 22, 12, 0, tzinfo=tz.utc))
+            m = zenodo_fi.map_workbook(
+                xlsx_min.read_workbook(path),
+                recorded_at=datetime(2026, 10, 22, 12, 0, tzinfo=timezone.utc))
             s_rep = validate_sessions(m["sessions"], existing_ids=store.session_ids())
             o_rep = validate_observations(
                 m["observations"], known_sessions={r.session_id for r in s_rep.accepted},
@@ -299,7 +353,7 @@ class TestOpenEnvironment(OpenDataTestBase):
             from sra.metrics import build_metric_report
             rep = build_metric_report(store.fetch_sessions(school_id="FI-ZEN-20825233"),
                                       store.fetch_observations(school_id="FI-ZEN-20825233"))
-            results = rep["metrics"]  # to_dict(): {name, status, value, reason, ...}
+            results = rep["metrics"]
             # FI-датасет не содержит served/prepared масс и avoidable-классификации:
             # все метрики честно UNAVAILABLE с конкретной причиной, а не числом.
             self.assertTrue(all(x["status"] == "UNAVAILABLE" for x in results),
@@ -320,7 +374,6 @@ class TestOpenEnvironment(OpenDataTestBase):
     def test_guards_open_env(self):
         store, m = self._import_fi()
         try:
-            # синтетика в OPEN запрещена
             from sra.contracts import SessionRecord
             rec = SessionRecord(
                 session_id="X", school_id="S", service_date=date(2026, 1, 1),
@@ -332,13 +385,11 @@ class TestOpenEnvironment(OpenDataTestBase):
             with self.assertRaises(GuardError) as cm:
                 store.import_sessions([rec], actor="t")
             self.assertEqual(cm.exception.code, "E_SYNTHETIC_IN_OPEN_ENV")
-            # verify чужих данных запрещён
             sid = sorted(store.session_ids())[0]
             with self.assertRaises(GuardError) as cm:
                 store.verify("session", sid, verifier="we", method="self-check",
                              source_ref="t", actor="t")
             self.assertEqual(cm.exception.code, "E_VERIFY_NOT_AVAILABLE_OPEN")
-            # фазовые протоколы запрещены
             from sra.phases import PhaseManager
             pm = PhaseManager(store)
             with self.assertRaises(GuardError) as cm:
@@ -354,8 +405,6 @@ class TestOpenEnvironment(OpenDataTestBase):
             class _NoPolicies:
                 def find_applicable(self, *a, **k):
                     return []
-                def get(self, *a, **k):
-                    raise LookupError
             res = propose_adjustment(store, _NoPolicies(),
                                      school_id="FI-ZEN-20825233",
                                      meal_type="LUNCH",
@@ -367,9 +416,7 @@ class TestOpenEnvironment(OpenDataTestBase):
         finally:
             store.close()
 
-    def test_real_env_rejects_open_data_and_demo_too(self):
-        # REAL-среда принимает только НАШИ данные: импорт открытых данных в REAL
-        # формально проходит guard по статусу, но CLI import-open отказывает по среде.
+    def test_demo_env_rejects_real_observed(self):
         store = EvidenceStore(self.tmp / "demo-env.sqlite3", enums.ENV_DEMO)
         try:
             from sra.contracts import SessionRecord

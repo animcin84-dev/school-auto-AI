@@ -37,14 +37,18 @@ SCHOOL_DEFAULT = "FI-ZEN-20825233"
 TIMEZONE = "Europe/Helsinki"
 N_BASELINE_ROWS = 135  # описание записи: 135 baseline + 20 intervention
 
+# Фактическая шапка файла v1: DATE (сериал Excel), MENU, "KSW kg", "PW kg",
+# "PW g", DINERS, "PW/g/diner", "KSW/g/diner" (+ пустые служебные колонки).
 WANTED = {
-    "date": ("date", "day", "paiva", "pv", "datum", "kuukausi"),
-    "pw": ("pw",),
-    "pw_per_diner": ("pw/g/diner", "pwperdiner", "pwg/diner"),
-    "ksw": ("ksw",),
+    "date": ("date", "day", "paiva", "pv", "datum"),
+    "menu": ("menu", "menuitem", "menuid"),
+    "pw_kg": ("pwkg", "pw"),
+    "pw_g": ("pwg",),
+    "ksw_kg": ("kswkg", "ksw"),
+    "ksw_g": ("kswg",),
+    "pw_per_diner": ("pw/g/diner", "pwperdiner"),
     "ksw_per_diner": ("ksw/g/diner", "kswperdiner"),
     "diners": ("diners",),
-    "menu": ("menu", "menuitem", "menuid"),
 }
 
 LIMITATIONS = [
@@ -102,18 +106,27 @@ def map_workbook(wb: dict, *, school_id: str = SCHOOL_DEFAULT,
         report["rows_total"] += 1
         get = lambda key: (row[cols[key]] if key in cols and cols[key] < len(row) else None)
         d = parse_any_date(get("date"))
-        pw = get("pw")
+        pw_kg = get("pw_kg")
+        pw_g_col = get("pw_g")
         diners = get("diners")
         if d is None:
             report["rows_skipped"].append({"row": i + 1, "reason": "дата не распознана",
                                            "raw_date": str(get("date"))})
             continue
-        if pw is None or isinstance(pw, (str, bool)) or float(pw) < 0:
+        if pw_g_col is not None and not isinstance(pw_g_col, (str, bool)) \
+                and float(pw_g_col) >= 0:
+            pw_g = round(float(pw_g_col), 3)
+            if pw_kg is not None and not isinstance(pw_kg, (str, bool)):
+                if abs(float(pw_kg) * 1000.0 - pw_g) > 1.0:
+                    report.setdefault("crosscheck_warnings", []).append(
+                        {"row": i + 1, "date": d.isoformat(),
+                         "detail": f"PW kg*1000={round(float(pw_kg)*1000, 3)} != PW g={pw_g}"})
+        elif pw_kg is not None and not isinstance(pw_kg, (str, bool)) and float(pw_kg) >= 0:
+            pw_g = round(float(pw_kg) * 1000.0, 3)
+        else:
             report["rows_skipped"].append({"row": i + 1, "date": d.isoformat(),
-                                           "reason": f"PW не число/отрицательное: {pw!r}"})
+                                           "reason": f"PW нет числа: kg={pw_kg!r}, g={pw_g_col!r}"})
             continue
-        pw_kg = float(pw)
-        pw_g = round(pw_kg * 1000.0, 3)
         diners_int = int(diners) if diners is not None and not isinstance(diners, (str, bool)) else None
         menu = get("menu")
         phase = enums.PHASE_BASELINE if data_rows < N_BASELINE_ROWS else enums.PHASE_INTERVENTION
@@ -137,7 +150,7 @@ def map_workbook(wb: dict, *, school_id: str = SCHOOL_DEFAULT,
             avoidable_waste_g=None, avoidability_status=enums.AV_UNCLASSIFIED,
             evidence_status=enums.REAL_OBSERVED, source_ref=SOURCE_REF,
             observed_at=observed, recorded_at=recorded,
-            notes=(f"PW={pw_kg} кг за день (конвертация кг→г); dish_id=ALL — агрегат дня, "
+            notes=(f"PW за день (kg-колонка файла: {pw_kg}); dish_id=ALL — агрегат дня, "
                    "разбивка по блюдам в датасете отсутствует")))
         report["rows_imported"] += 1
     report["n_sessions"] = len(sessions)

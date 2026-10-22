@@ -27,26 +27,45 @@
 Честные границы: это SYNTHETIC — проверка кода и реалистичность сценария.
 EMPIRICAL_STUDY-доли не переносимы на школу КЗ без локальных измерений.
 
-## Вариант 2 (инфраструктура ГОТОВА, файлы ещё не переданы): датасеты Zenodo
+## Вариант 2 — ВЫПОЛНЕН: датасеты импортированы в OPEN-среду
 
-Лицензии: Латвия — **CC BY 4.0** (подтверждена Read_me записи); Финляндия —
-запись открыта, точный тип лицензии подтвердить по странице при скачивании.
+Файлы загружены пользователем в репозиторий (корень), подлинность финского
+файла подтверждена md5 с страницей Zenodo (3f7e610fedc1810f7e8bc1bd47103ee7).
+Лицензии: Латвия — CC BY 4.0 (лист Meta-data файла); Финляндия — открытая
+запись (тип лицензии — по странице записи; цитирование обязательно).
 
-1. **Финляндия, 155 учебных дней, 2024–2025** — Zenodo record 20825233,
-   файл «Food waste data school Finland 2024-2025.xlsx» (31.2 kB):
-   https://zenodo.org/records/20825233/files/Food%20waste%20data%20school%20Finland%202024-2025.xlsx?download=1
-   Переменные: PW (кг, отходы тарелок/день), PW/g/diner, KSW (кухня+раздача),
-   KSW/g/diner, DINERS, MENU (1–25). Baseline 135 дней + intervention 20.
-2. **Латвия, 4 школы Резекне, декабрь 2023** — Zenodo record 18441715
-   (124.7 kB + Read_me). Прямые взвешивания индивидуальных тарелок, 1–7 классы,
-   частично pre-served модель; общие ёмкости исключены авторами.
-   Переменные (Read_me): School_ID, Measurement_period, Student_group,
-   School_level, Age_group, Meal_type, Served_food_g, Plate_waste_g.
+1. **Финляндия** («Food waste data school Finland 2024-2025.xlsx», 31 210 B,
+   Zenodo 20825233): фактическая шапка `DATE (сериал Excel), MENU, KSW kg,
+   PW kg, PW g, DINERS, PW/g/diner, KSW/g/diner`; импортировано **155/155
+   дней без пропусков** (2024-08-08…2025-04-…), baseline 135 + intervention 20
+   по позиции строк (описание записи).
+2. **Латвия** («Plate_waste_december_2023.xlsx», 124 722 B, Zenodo 18441715):
+   листы Meta-data + School 1..4; дневные блоки «день (дата) | участники» →
+   блюда «название | served_g | plate_waste_g» + итоги дня. Импортировано
+   **20 сессий (4 школы × 5 дней), 60 блюд, 0 пропусков**; кросс-чек итогов
+   дней: 0 расхождений; сводка Grades 1-4/5-7 (агрегат за неделю, без дат)
+   прочитана в отчёт, в БД не включена.
 
-### Как передать файлы
-Файлы нужно ПРИЛОЖИТЬ К СООБЩЕНИЮ в чате (загрузка в песочницу напрямую
-из интернета невозможна: сеть ограничена github/npm/pypi, zenodo.org
-недоступен для скачивания).
+### Проверка правильности на реальных данных
+- UneatenIndex системы воспроизвёл авторские проценты «Plate waste /
+  Food served (%)»: S1 16.07 % (файл: 16.0676), S2 17.56 % (17.5596),
+  S3 15.05 %, S4 12.71 % — формула и агрегация совпадают с авторскими.
+- selfcheck OPEN-хранилища: OK (нет синтетики, нет исполнений, маркер среды).
+- FI: все 6 метрик UNAVAILABLE с конкретными причинами (нет served/prepared
+  масс, нет avoidable-классификации, спрос не наблюдается); прогноз —
+  DATA_NOT_READY. Это честный результат устройства датасета, не сбой.
+- LV: прогноз DATA_NOT_READY честно (5 дней истории < min_train).
+
+### Команды воспроизведения
+```
+python3 -m sra init-db --db data/open/open.sqlite3 --environment open
+python3 -m sra import-open --db data/open/open.sqlite3 \
+    --file "Food waste data school Finland 2024-2025.xlsx" --dataset finland
+python3 -m sra import-open --db data/open/open.sqlite3 \
+    --file "Plate_waste_december_2023.xlsx" --dataset latvia
+python3 -m sra metrics --db data/open/open.sqlite3 --environment open \
+    --school-id LV-ZEN-18441715-S1
+```
 
 ### Что уже реализовано (коммит с этим файлом)
 - **Среда `OPEN`** (третий маркер среды наряду с REAL/DEMO): чужие реальные
